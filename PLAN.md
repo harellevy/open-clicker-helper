@@ -1,173 +1,220 @@
-# open-clicker-helper — Implementation Plan
+# open-clicker-helper — Plan
 
-An open-source, offline-first AI assistant that watches your screen, listens to your voice, figures out where you need to click, animates a cursor path on a transparent overlay, and reads the answer back to you.
+## Context
 
----
-
-## Phases
-
-### P0 — Tauri Shell + Platform Abstraction ✅
-
-**Goal:** A buildable, CI-passing Tauri 2 + React/Vite project with clean OS boundaries.
-
-- pnpm workspace with `ui/` (Vite + React + TS, two HTML entries: `settings.html` + `overlay.html`) and `src-tauri/` Rust shell.
-- `tauri.conf.json`: two windows — `settings` (880×620, visible) and `overlay` (transparent, decorations-off, always-on-top, hidden at startup).
-- Platform abstraction layer (`src-tauri/src/platform/`) with four traits:
-  - `Permissions` — TCC-style permission status (screen recording, accessibility, microphone).
-  - `OverlayWindow` — configure the transparent overlay with objc2 on macOS (`kCGScreenSaverWindowLevel`, `canJoinAllSpaces`, `fullScreenAuxiliary`, `ignoresMouseEvents`).
-  - `ScreenCapture` — stub; real impl lands in P4.
-  - `MouseTracker` — stub; real impl lands in P4.
-- macOS impl (`platform/macos/`), stub impl for non-macOS hosts so the crate always compiles.
-- `get_permissions` and `ping_sidecar` Tauri commands wired to a minimal React settings page rendering permission badges.
-- CI: `cargo fmt/clippy/test` on macOS-14 + ubuntu-latest, `pnpm typecheck`, uv pytest for the sidecar.
+Greenfield repo (`/home/user/open-clicker-helper`). Build an open-source, offline-first AI clicker buddy: hold a hotkey, speak a question, the app screenshots the focused window, asks a local vision LLM where to click, animates a cursor path on a transparent overlay, and reads the answer back.
 
 ---
 
-### P1 — Python Sidecar (stdio JSON-RPC) ✅
+## Locked decisions (post-review)
 
-**Goal:** A reliable, lifecycle-managed AI back-end that the Rust shell can call from any `tauri::command`.
-
-- `sidecar/` — uv-managed Python project (`pyproject.toml`, PEP 735 dev dependency group).
-- `och_sidecar` package with:
-  - `rpc.py` — async line-delimited JSON-RPC 2.0 over stdin/stdout (request/response + server-side notifications with `*.progress` method names).
-  - `handlers.py` — `ping` handler (returns `{ok: true, version: "0.1.0"}`); further methods added per phase.
-  - `providers/` — abstract `Provider` base class; concrete implementations added in P3/P4/P6.
-- Rust `Sidecar` struct (`src-tauri/src/sidecar.rs`): spawns `uv run --project <dir> och-sidecar`, owns `ChildStdin`, drives a tokio read-loop that routes responses to `oneshot` channels and broadcasts progress notifications.
-- `AppState` holds `Mutex<Option<Arc<Sidecar>>>`; spawned in `.setup()`, available to all `tauri::command`s via `State<AppState>`.
-- `ping_sidecar` command exposed to the frontend, health-checked in the settings UI.
-
----
-
-### P2 — Global Hotkey + Permissions Flow
-
-**Goal:** A single hotkey starts a recording session; the app surfaces actionable permission prompts so first-run just works.
-
-- Register a configurable global shortcut (default `Cmd+Shift+Space`) via `tauri-plugin-global-shortcut`; emit a Tauri event `clicker://start` to both windows.
-- Permissions flow:
-  - On startup call `get_permissions`; if any are `denied`/`unknown`, show a step-by-step guide card in the settings window.
-  - macOS: open `System Settings` panes via `open x-apple.systempreferences:` URLs using `tauri-plugin-shell`.
-  - Accessibility permission checked with `AXIsProcessTrusted` (objc2); screen-recording with `CGRequestScreenCaptureAccess`.
-- Store the chosen hotkey in `tauri-plugin-store` (`settings.json`); allow re-binding via the settings UI.
-- Show a small always-on-top HUD near the menu bar while a session is active (status: "Listening…" → "Thinking…" → "Done").
+- **Tauri 2 (Rust) + React/Vite frontend**, two windows: `settings` and `overlay`.
+- **Python sidecar** for AI, spawned by Tauri over stdio JSON-RPC so it dies when the app dies.
+- **`uv` for Python**, not PyInstaller. Ship a bundled `uv` binary in `src-tauri/binaries/`.
+- **Skip OmniParser for v1.** Use **Qwen2.5-VL** via Ollama for direct pixel-coordinate grounding.
+- **Two windows, not three.** One always-on-top overlay; settings in the main window.
+- **Native macOS window config via `objc2`** — `kCGScreenSaverWindowLevel`, `canJoinAllSpaces`, `ignoresMouseEvents`.
+- **STT default: `mlx-whisper`** (Apple Silicon). Cloud fallback: OpenAI Whisper.
+- **Screen capture via `scap`** crate (ScreenCaptureKit wrapper) for per-window capture.
+- **Audio capture via `cpal`** (cross-platform, no extra system deps on macOS).
+- **Offline-first:** Ollama / mlx-whisper / Kokoro. All cloud providers require user-supplied API keys.
 
 ---
 
-### P3 — Voice Input (STT)
+## Cross-platform readiness
 
-**Goal:** Record microphone audio while the hotkey is held; transcribe it with a local or cloud STT provider.
+All OS-specific code lives behind Rust traits:
 
-**Rust side**
-- `platform/macos/mouse.rs` → real `MouseTracker` impl using `CGEventPost` / `NSEvent` for current cursor position.
-- `tauri-plugin-microphone` (or raw `cpal`) for mic capture; stream PCM frames over a second sidecar channel or write a temp WAV file.
-- `record_audio` Tauri command: starts capture on `clicker://start`, stops on hotkey release or `clicker://stop`; returns a temp file path.
-
-**Python side**
-- `providers/stt/` with `SttProvider` abstract base.
-- `MlxWhisperProvider` — calls `mlx_whisper.transcribe(audio_path)` (offline, Apple Silicon).
-- `WhisperOpenAIProvider` — calls `openai.audio.transcriptions.create` (cloud fallback).
-- `transcribe` RPC method dispatches to the active provider; streams `transcribe.progress` notifications with partial text.
-
----
-
-### P4 — Screen Capture + Vision LLM
-
-**Goal:** Capture the focused window and ask a local vision LLM where to click.
-
-**Rust side**
-- `platform/macos/capture.rs` — real `ScreenCapture` impl using `ScreenCaptureKit` via `core-graphics` / `objc2`; capture only the frontmost `CGWindowID` to avoid capturing the overlay itself.
-- `get_focused_window` Tauri command: returns a temp PNG path + window title.
-- Unhide the overlay window during the "Thinking…" state so the animated cursor can be shown.
-
-**Python side**
-- `providers/vision/` with `VisionProvider` abstract base.
-- `OllamaVisionProvider` — sends image + prompt to a local Ollama endpoint (`qwen2.5-vl:7b` default); parses JSON `{x, y, explanation}` from the response.
-- `OpenAIVisionProvider` — calls `openai.chat.completions.create` with `gpt-4o` (cloud fallback).
-- `AnthropicVisionProvider` — calls `anthropic.messages.create` with `claude-opus-4-6`.
-- `locate_click` RPC method: accepts `{image_b64, question}`, dispatches to active provider, returns `{x: float, y: float, explanation: str}` in screen-fraction coordinates (0–1).
-
----
-
-### P5 — Overlay Cursor Animation
-
-**Goal:** Animate a ghost cursor from its current position to the target, then optionally perform the click.
-
-- React `Overlay.tsx`: subscribes to Tauri events; renders an SVG cursor sprite and a bezier path.
-- Animation: spring-physics tween from `(cursor_x, cursor_y)` → `(target_x, target_y)` over ~600 ms; easing matches macOS system animations.
-- Accessibility option: highlight target with a pulsing ring in addition to the path.
-- Optional auto-click: `perform_click` Tauri command uses `CGEventPost(kCGHIDEventTap, mouseDown + mouseUp)` at the target coordinates (requires accessibility permission).
-- The overlay window hides itself once the animation completes (`overlay.hide()` after a 1 s grace period).
-
----
-
-### P6 — Voice Output (TTS)
-
-**Goal:** Read the LLM explanation back to the user in a natural voice.
-
-**Python side**
-- `providers/tts/` with `TtsProvider` abstract base.
-- `KokoroProvider` — streams PCM audio from `kokoro-onnx`; plays via `sounddevice` directly in the sidecar process (offline, low latency).
-- `OpenAITtsProvider` — calls `openai.audio.speech.create` with `tts-1`.
-- `speak` RPC method: accepts `{text}`, dispatches to active provider; streams `speak.progress` notifications (`{chunk_index, total}`) so the UI can show a progress bar.
-
-**Rust side**
-- `speak_result` Tauri command: calls `sidecar.call("speak", …)` and forwards progress events to the frontend.
-
----
-
-### P7 — Model Wizard + Settings UI
-
-**Goal:** A polished first-run wizard that detects available local models and lets the user pick cloud providers.
-
-- Settings window gains a multi-step wizard route shown on first launch (stored in `tauri-plugin-store`).
-- **Step 1 — Permissions**: re-uses the P2 permission cards; "Fix" buttons open the relevant System Settings pane.
-- **Step 2 — STT**: auto-detects `mlx_whisper` install; offers cloud (OpenAI key input) as fallback.
-- **Step 3 — Vision LLM**: pings `http://localhost:11434` to check if Ollama is running; lists pulled models matching `*-vl`; offers OpenAI / Anthropic / Groq as cloud options.
-- **Step 4 — TTS**: checks for `kokoro-onnx` + a voice model; offers OpenAI TTS as cloud fallback.
-- **Step 5 — Hotkey**: live hotkey recorder; shows a preview of the activation flow.
-- Provider config stored in `settings.json` via `tauri-plugin-store`; read by the sidecar on startup via a `get_config` RPC call.
-
----
-
-### P8 — Packaging + Release
-
-**Goal:** A signed, notarized `.dmg` that a user can download, open, and use in under 2 minutes.
-
-- Bundle a platform-specific `uv` binary inside the app (`src-tauri/binaries/uv-aarch64-apple-darwin`) so users don't need `uv` on `PATH`.
-- `resolve_sidecar_dir` updated to probe the bundled resources path when running from a packaged app.
-- Icons: generate a full `icons/` set (1024×1024 PNG → icns, ico, various PNGs) from a source SVG.
-- `tauri.conf.json` bundle section: add `signingIdentity`, `providerShortName`, entitlements for screen recording and accessibility.
-- GitHub Actions release workflow: build on `macos-14`, sign + notarize with `notarytool`, upload `.dmg` as a GitHub Release asset.
-- Auto-update: `tauri-plugin-updater` pointed at the GitHub Releases API; checks on startup, prompts with a non-blocking banner.
-
----
-
-## Architecture summary
-
-```
-┌─────────────────────────────────┐
-│         React UI (Vite)         │
-│  settings window  overlay window│
-└────────────┬────────────────────┘
-             │ Tauri commands / events
-┌────────────▼────────────────────┐
-│       Tauri Shell (Rust)        │
-│  platform/  ipc/  sidecar/      │
-│  objc2 overlay, CGCapture, etc. │
-└────────────┬────────────────────┘
-             │ stdio JSON-RPC
-┌────────────▼────────────────────┐
-│     Python Sidecar (uv)         │
-│  STT  |  Vision LLM  |  TTS     │
-│  providers: local + cloud       │
-└─────────────────────────────────┘
+```rust
+trait ScreenCapture  { fn capture_focused_window(&self) -> AppResult<Vec<u8>>; }
+trait OverlayWindow  { fn make_click_through_topmost(&self, w: &WebviewWindow) -> AppResult<()>; }
+trait Permissions    { fn screen_recording(&self) -> PermissionStatus; ... }
+trait MouseTracker   { fn poll(&self) -> AppResult<(i32, i32)>; }
+trait GlobalHotkey   { ... }
 ```
 
-**Provider matrix**
+v1 ships only `platform::macos` impls (`scap`, `objc2`, `cpal`). A `platform::stub` keeps the crate compiling on Linux CI. `platform::windows` arrives in P8.
 
-| Capability | Offline (default) | Cloud option A | Cloud option B |
-|---|---|---|---|
-| STT | mlx-whisper (Apple Silicon) | OpenAI Whisper | — |
-| Vision LLM | Ollama (Qwen2.5-VL) | OpenAI GPT-4o | Anthropic Claude |
-| TTS | Kokoro-ONNX | OpenAI TTS | — |
+---
 
-All cloud providers require the user to supply their own API key; no key is bundled or telemetry collected.
+## Repository layout
+
+```
+open-clicker-helper/
+├── README.md
+├── LICENSE
+├── PLAN.md
+├── package.json          # pnpm workspace root
+├── pnpm-workspace.yaml
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   ├── capabilities/
+│   ├── binaries/         # bundled uv binary (gitignored except .gitkeep)
+│   ├── icons/
+│   └── src/
+│       ├── lib.rs
+│       ├── main.rs
+│       ├── error.rs
+│       ├── ipc.rs
+│       ├── sidecar.rs
+│       ├── audio.rs      # cpal mic capture (P3)
+│       └── platform/
+│           ├── mod.rs
+│           ├── stub.rs
+│           └── macos/
+│               ├── mod.rs
+│               ├── window.rs
+│               ├── permissions.rs
+│               ├── capture.rs    # scap (P4)
+│               └── mouse.rs
+├── sidecar/
+│   ├── pyproject.toml
+│   └── och_sidecar/
+│       ├── __main__.py
+│       ├── rpc.py
+│       ├── pipeline.py       # P3+
+│       ├── grounding.py      # P4+
+│       ├── providers/
+│       │   ├── base.py
+│       │   ├── stt_mlx_whisper.py
+│       │   ├── stt_openai.py
+│       │   ├── vlm_ollama.py
+│       │   ├── vlm_openai.py
+│       │   ├── vlm_anthropic.py
+│       │   ├── tts_kokoro.py
+│       │   └── tts_openai.py
+│       └── handlers.py
+├── ui/
+│   ├── index.html        # settings entry
+│   ├── overlay.html      # overlay entry
+│   ├── vite.config.ts
+│   └── src/
+│       ├── settings/
+│       │   ├── App.tsx
+│       │   ├── pages/
+│       │   │   ├── Providers.tsx
+│       │   │   ├── Permissions.tsx
+│       │   │   └── Hotkeys.tsx
+│       │   └── main.tsx
+│       └── overlay/
+│           ├── Overlay.tsx
+│           ├── Annotation.tsx  # SVG cursor animation (P4)
+│           ├── animator.ts     # easing / spring physics
+│           └── main.tsx
+└── docs/
+    ├── architecture.md
+    ├── providers.md
+    └── porting-windows.md
+```
+
+---
+
+## End-to-end flow
+
+1. User holds global hotkey (default `` ⌘⇧` ``).
+2. `audio.rs` records mic via `cpal`; `tracker` polls cursor position every 50 ms.
+3. On release: `platform::macos::capture` grabs a PNG of the frontmost window.
+4. `sidecar.rs` sends one JSON-RPC `pipeline.run` request with `{audio_b64, image_b64, question_hint}`.
+5. Sidecar `pipeline.run`:
+   a. STT (mlx-whisper) → text.
+   b. `grounding.locate(image, question)` calls the active vision LLM; returns `{steps: [{x, y, explanation}]}`.
+   c. Validate JSON; on parse failure or low-confidence score, retry once with a stricter prompt.
+   d. TTS (Kokoro) → wav bytes for the explanation text.
+   e. Stream progress events back over stdio (`pipeline.progress` notifications).
+6. Tauri receives events, denormalises `xy_norm` (0–1) → screen pixels using window bounds.
+7. `Annotation.tsx` animates an SVG cursor from current position → target with a bezier path.
+8. Audio response plays via `cpal` output (or system audio for cloud TTS).
+9. Multi-step (`steps[]`) animates sequentially with a 300 ms pause between steps.
+
+---
+
+## Implementation phases (ship fast, iterate)
+
+**P0 — bootstrap (smallest demo loop)**
+- `cargo create-tauri-app` with React+TS+Vite, two windows (`settings`, `overlay`).
+- `platform/macos/window.rs` uses `objc2` to set level + collection behavior + ignoresMouseEvents.
+- `platform/macos/permissions.rs` reads TCC status via `core-foundation`.
+- `get_permissions` and `ping_sidecar` Tauri commands; minimal settings UI with permission badges.
+- CI: `cargo fmt`, `cargo clippy`, `cargo test` on macOS-14 + ubuntu-latest; `pnpm typecheck`; uv pytest.
+
+**P1 — sidecar transport**
+- `sidecar/pyproject.toml` declares minimal deps; `uv` lock file committed.
+- `och_sidecar/rpc.py`: read newline-delimited JSON-RPC 2.0 from stdin, write to stdout; broadcast channel for progress notifications.
+- `sidecar.rs`: spawn `binaries/uv run och-sidecar`; own stdin/stdout; route responses via `oneshot` channels.
+- One stub handler per category returning canary values (`ping → {ok: true}`).
+
+**P2 — settings + provider abstraction**
+- `tauri-plugin-store` JSON file in app-support for provider config + hotkey preference.
+- React `Providers.tsx`: tabs for STT / TTS / Vision LLM; input fields for API keys.
+- "Test" button per provider → `providers.test` RPC call → inline result badge.
+- `Permissions.tsx`: status badges + "Open System Settings" deep-link buttons.
+- `Hotkeys.tsx`: rebind global shortcut via `tauri-plugin-global-shortcut`.
+
+**P3 — voice round-trip (no vision yet)**
+- `audio.rs` records mic to in-memory WAV via `cpal`; `record_audio` Tauri command.
+- Implement `stt_mlx_whisper.py` and `tts_kokoro.py` providers.
+- `pipeline.run` (text-only mode): audio → STT → LLM text answer → TTS → play.
+- HUD shows transcript bubble. Confirms full hotkey → audio → response loop works.
+
+**P4 — vision grounding (the core feature)**
+- `platform/macos/capture.rs`: `scap` per-window capture; exclude the overlay window.
+- `vlm_ollama.py`: call Ollama `/api/chat` with `qwen2.5-vl:7b`; parse `{steps}` JSON from response.
+- `grounding.locate`: validate, clamp to [0,1], retry once on parse failure.
+- `Annotation.tsx`: SVG cursor + bezier path animation; spring-physics easing.
+- Smoke test on real apps: System Settings, Finder, Safari.
+
+**P5 — first-run model wizard**
+- `Models.tsx` checks for `~/Library/Application Support/` Ollama models + mlx-whisper cache.
+- Downloads Whisper weights, Kokoro voice, pulls `qwen2.5-vl:7b` via `ollama pull`.
+- Progress UI driven by sidecar download events (`download.progress` notifications).
+
+**P6 — polish + tray**
+- macOS tray icon; conversation history (last N sessions) stored in `tauri-plugin-store`.
+- Notarisation + DMG via `tauri build`; documentation pass for README + `docs/`.
+
+**P7 — OmniParser SoM (v1.1, optional)**
+- Add OmniParser v2 to sidecar behind a feature flag (`OCH_GROUNDING_MODE=som`).
+- `grounding.py` adds `mode: "direct" | "som"` dispatch.
+- Settings exposes a "Use OmniParser for hard UIs" toggle.
+
+**P8 — Windows port (later)**
+- Add `src-tauri/src/platform/windows/` impl using `windows-capture` + `windows` crate.
+- Add `windows-capture` to `Cargo.toml` under `[target.'cfg(target_os = "windows")'.dependencies]`.
+- Sidecar/UI unchanged. STT switches to `faster-whisper` as `mlx-whisper` is Apple-only.
+
+---
+
+## Critical files (create-first order)
+
+1. `src-tauri/src/platform/macos/window.rs` — objc2 overlay config (blocks everything else on macOS).
+2. `src-tauri/src/platform/macos/capture.rs` — `scap` per-window PNG (blocks P4).
+3. `src-tauri/src/sidecar.rs` — stdio JSON-RPC client (blocks all AI features).
+4. `sidecar/pyproject.toml` + `sidecar/och_sidecar/rpc.py` — sidecar entry point.
+5. `sidecar/och_sidecar/pipeline.py` + `grounding.py` — core AI pipeline (blocks P3/P4).
+6. `ui/src/overlay/Annotation.tsx` + `animator.ts` — cursor animation (blocks P4 UX).
+7. `ui/src/settings/pages/Providers.tsx` — provider config UI (blocks P2).
+
+---
+
+## Key dependencies
+
+- **Rust:** `tauri` 2.x, `tauri-plugin-store`, `tauri-plugin-global-shortcut`, `tauri-plugin-shell`, `scap`, `cpal`, `objc2`, `objc2-app-kit`, `tokio`, `tracing`
+- **Python:** `pydantic`, `numpy`, `pillow`, `mlx-whisper`, `kokoro-onnx`, `sounddevice`, `openai`, `anthropic`
+- **Frontend:** `react`, `react-router-dom`, `@tauri-apps/api`, `framer-motion` (or custom spring), `vite`
+
+---
+
+## Verification
+
+- `cargo test --manifest-path src-tauri/Cargo.toml` — unit tests for platform stubs + sidecar client.
+- `pytest sidecar/` — provider unit tests (mock HTTP, mock audio).
+- `pnpm test` (vitest) — animator interpolation + coordinate normalisation.
+- **Manual smoke matrix** (documented in `docs/architecture.md`):
+  1. Overlay stays click-through across Spaces and fullscreen apps.
+  2. Screen Recording permission flow on a fresh machine (never-granted state).
+  3. Voice loop with mlx-whisper + Kokoro, no network.
+  4. Vision loop with `ollama pull qwen2.5-vl:7b` running locally.
+  5. Cloud loop with OpenAI key configured.
+  6. App quit kills sidecar process (no orphans).
+- `tauri build` produces a notarisable `.dmg` with bundled `uv` binary.
