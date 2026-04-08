@@ -143,28 +143,29 @@ pub fn capture_screen() -> AppResult<Option<String>> {
 /// target application — this is guaranteed by `make_click_through_topmost`.
 #[tauri::command]
 pub async fn click_at_normalized(app: tauri::AppHandle, x: f64, y: f64) -> AppResult<()> {
-    // Get primary monitor size for coordinate conversion.
-    // We use a temporary webview window handle to access monitor info.
-    let (px, py) = if let Some(window) = app.get_webview_window("overlay") {
-        if let Ok(Some(monitor)) = window.primary_monitor() {
-            let size = monitor.size();
-            (
-                (x.clamp(0.0, 1.0) * size.width as f64).round(),
-                (y.clamp(0.0, 1.0) * size.height as f64).round(),
-            )
-        } else {
-            (x * 1440.0, y * 900.0) // fallback
-        }
-    } else {
-        (x * 1440.0, y * 900.0) // fallback
-    };
-
+    let (px, py) = resolve_px(&app, x, y);
     tracing::info!("click_at_normalized ({x:.3}, {y:.3}) → pixels ({px}, {py})");
 
     // Run the blocking CGEvent calls off the async executor.
     tokio::task::spawn_blocking(move || platform::current().mouse().click(px, py))
         .await
         .map_err(|e| AppError::Platform(format!("spawn_blocking click: {e}")))?
+}
+
+/// Convert normalised (0–1) coords to physical pixels using the primary monitor.
+/// Falls back to a 1440×900 logical size when the monitor cannot be queried.
+fn resolve_px(app: &tauri::AppHandle, x: f64, y: f64) -> (f64, f64) {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return (x * 1440.0, y * 900.0);
+    };
+    let Ok(Some(monitor)) = window.primary_monitor() else {
+        return (x * 1440.0, y * 900.0);
+    };
+    let size = monitor.size();
+    (
+        (x.clamp(0.0, 1.0) * f64::from(size.width)).round(),
+        (y.clamp(0.0, 1.0) * f64::from(size.height)).round(),
+    )
 }
 
 /// Generic JSON-RPC pass-through to the Python sidecar.
