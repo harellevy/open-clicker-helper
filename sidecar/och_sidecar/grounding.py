@@ -27,9 +27,9 @@ from .providers.base import ProviderError, VlmProvider
 
 logger = logging.getLogger(__name__)
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+# ── Default prompts (user-overridable via settings) ──────────────────────────
 
-_SYSTEM_PROMPT = """You are a UI grounding assistant. Given a screenshot and a task description, output the screen coordinates where the user should click to complete the task.
+DEFAULT_GROUNDING_SYSTEM_PROMPT = """You are a UI grounding assistant. Given a screenshot and a task description, output the screen coordinates where the user should click to complete the task.
 
 IMPORTANT: Respond ONLY with a valid JSON object — no prose, no markdown fences.
 
@@ -46,6 +46,15 @@ Schema:
 
 Coordinates are normalised: (0, 0) is the top-left corner, (1, 1) is the bottom-right. For multi-step tasks include one entry per click in order."""
 
+DEFAULT_CAPTION_SYSTEM_PROMPT = """You are a UI observer. Describe what is visible on the user's screen in 1–3 short sentences so a downstream agent can decide what to click.
+
+Focus on:
+- the app and page/window in view
+- the main interactive elements (buttons, inputs, menus) and their rough locations
+- any dialog, modal, or notification currently on top
+
+Respond with plain prose — no JSON, no lists, no code fences."""
+
 _RETRY_SUFFIX = "\n\nRespond ONLY with the JSON object. No explanation, no code fences."
 
 
@@ -55,18 +64,26 @@ def locate(
     vlm: VlmProvider,
     image_png: bytes,
     question: str,
+    *,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
-    """Return ``{"steps": [{"x": float, "y": float, "explanation": str}]}``.
+    """Return ``{"steps": [{"x": float, "y": float, "explanation": str}], "raw": str}``.
+
+    ``system_prompt`` overrides the built-in grounding prompt (used by the
+    settings-page prompt editor). Pass ``None`` to keep the default.
 
     Raises `ProviderError` if both attempts fail to parse.
     """
-    prompt = f"{_SYSTEM_PROMPT}\n\nTask: {question}"
+    base = (system_prompt or DEFAULT_GROUNDING_SYSTEM_PROMPT).rstrip()
+    prompt = f"{base}\n\nTask: {question}"
 
     # First attempt
     raw = vlm.complete(prompt, image_bytes=image_png)
     first_err_msg: str
     try:
-        return _parse(raw)
+        parsed = _parse(raw)
+        parsed["raw"] = raw
+        return parsed
     except ValueError as exc:
         first_err_msg = str(exc)
         logger.warning("grounding parse error (will retry): %s | raw=%r", exc, raw[:200])
@@ -74,7 +91,9 @@ def locate(
     # Retry with a stricter suffix
     raw2 = vlm.complete(prompt + _RETRY_SUFFIX, image_bytes=image_png)
     try:
-        return _parse(raw2)
+        parsed = _parse(raw2)
+        parsed["raw"] = raw2
+        return parsed
     except ValueError as second_err:
         raise ProviderError(
             f"Grounding failed after retry. "
@@ -82,6 +101,21 @@ def locate(
             f"Second error: {second_err}. "
             f"Last raw response: {raw2[:300]!r}"
         ) from second_err
+
+
+def caption(
+    vlm: VlmProvider,
+    image_png: bytes,
+    *,
+    system_prompt: str | None = None,
+) -> str:
+    """Ask the VLM for a short natural-language description of what's on screen.
+
+    Used by the debug overlay to show "what the VLM sees" alongside the
+    grounding answer.
+    """
+    prompt = (system_prompt or DEFAULT_CAPTION_SYSTEM_PROMPT).rstrip()
+    return vlm.complete(prompt, image_bytes=image_png).strip()
 
 
 # ── Parsing / validation ──────────────────────────────────────────────────────

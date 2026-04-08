@@ -4,9 +4,17 @@ import { Setup } from "./pages/Setup";
 import { PermissionsPage } from "./pages/Permissions";
 import { ProvidersPage } from "./pages/Providers";
 import { HotkeysPage } from "./pages/Hotkeys";
+import { DebugPage } from "./pages/Debug";
+import { PromptsPage } from "./pages/Prompts";
 import { ResetPage } from "./pages/Reset";
 
-type Page = "permissions" | "providers" | "hotkeys" | "reset";
+type Page =
+  | "permissions"
+  | "providers"
+  | "hotkeys"
+  | "prompts"
+  | "debug"
+  | "reset";
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -48,6 +56,8 @@ export function App() {
           <NavItem id="permissions" label="Permissions" current={page} onClick={setPage} />
           <NavItem id="providers" label="Providers" current={page} onClick={setPage} />
           <NavItem id="hotkeys" label="Hotkey" current={page} onClick={setPage} />
+          <NavItem id="prompts" label="System Prompts" current={page} onClick={setPage} />
+          <NavItem id="debug" label="Debug" current={page} onClick={setPage} />
           <NavItem id="reset" label="Reset" current={page} onClick={setPage} />
         </nav>
         <main className="main-content">
@@ -57,6 +67,12 @@ export function App() {
           )}
           {page === "hotkeys" && (
             <HotkeysPage settings={settings} onChange={handleSettings} />
+          )}
+          {page === "prompts" && (
+            <PromptsPage settings={settings} onChange={handleSettings} />
+          )}
+          {page === "debug" && (
+            <DebugPage settings={settings} onChange={handleSettings} />
           )}
           {page === "reset" && (
             <ResetPage onReset={setSettings} />

@@ -91,6 +91,25 @@ class TestLocate:
         assert len(result["steps"]) == 1
         assert result["steps"][0]["explanation"] == "Click Save"
         assert vlm.complete.call_count == 1
+        # locate() attaches the raw VLM response so debug mode can display it
+        assert "raw" in result
+
+    def test_custom_system_prompt_is_used(self):
+        """locate() should substitute the user-provided system_prompt."""
+        vlm = self._make_vlm('{"steps": [{"x": 0.5, "y": 0.3, "explanation": "ok"}]}')
+        _grounding.locate(
+            vlm, b"png", "do it", system_prompt="MY CUSTOM PROMPT"
+        )
+        prompt = vlm.complete.call_args_list[0].args[0]
+        assert "MY CUSTOM PROMPT" in prompt
+        assert _grounding.DEFAULT_GROUNDING_SYSTEM_PROMPT not in prompt
+
+    def test_caption_calls_vlm_with_caption_prompt(self):
+        vlm = self._make_vlm("A Chrome window with a Save button.")
+        out = _grounding.caption(vlm, b"png")
+        assert out == "A Chrome window with a Save button."
+        prompt = vlm.complete.call_args.args[0]
+        assert "observer" in prompt.lower() or "describe" in prompt.lower()
 
     def test_retries_on_first_parse_failure(self):
         good_json = '{"steps": [{"x": 0.2, "y": 0.8, "explanation": "retry ok"}]}'

@@ -133,7 +133,8 @@ def _grounding_locate(params: dict[str, Any]) -> dict[str, Any]:
     """Re-ground a question against a (new) screenshot without running STT/TTS.
 
     Used by the iterative multi-step loop: after each click Rust captures a
-    fresh screenshot and calls this to re-ground the next step.
+    fresh screenshot and calls this to re-ground the next step. The screenshot
+    is downscaled the same way as in pipeline.run() to keep upload times low.
 
     params:
         image_b64  – base-64-encoded PNG screenshot (required)
@@ -143,14 +144,17 @@ def _grounding_locate(params: dict[str, Any]) -> dict[str, Any]:
     import base64
 
     from . import grounding as _grounding
+    from . import imaging as _imaging
     from .pipeline import _make_vlm
 
     image_bytes = base64.b64decode(params["image_b64"])
+    small_png, _orig, _new = _imaging.downscale_png(image_bytes)
     question = params["question"]
     settings = params.get("settings") or {}
+    system_prompt = (settings.get("system_prompts") or {}).get("grounding") or None
 
     vlm = _make_vlm(settings)
-    return _grounding.locate(vlm, image_bytes, question)
+    return _grounding.locate(vlm, small_png, question, system_prompt=system_prompt)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

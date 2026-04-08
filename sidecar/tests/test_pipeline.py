@@ -103,7 +103,9 @@ class TestPipelineEventOrder:
     def test_final_result_has_expected_keys(self):
         audio_b64 = _b64(_fake_wav())
         events, final, *_ = self._run(audio_b64)
-        assert set(final.keys()) == {"transcript", "answer", "audio_b64", "steps"}
+        # "debug" is only present when debug_mode is enabled.
+        assert {"transcript", "answer", "audio_b64", "steps", "timings"} <= set(final.keys())
+        assert "debug" not in final
 
     def test_final_result_values(self):
         audio_b64 = _b64(_fake_wav())
@@ -146,11 +148,13 @@ class TestPipelineProviderCalls:
         mock_vlm.complete.assert_called_once_with("transcribed text", image_bytes=None)
 
     def test_grounding_called_with_decoded_image_when_image_b64_provided(self):
-        """When image_b64 is present the pipeline delegates to grounding.locate."""
+        """When image_b64 is present the pipeline downscales and delegates to grounding.locate."""
         from och_sidecar import grounding as _grounding
+        from och_sidecar import imaging as _imaging
 
         audio_b64 = _b64(_fake_wav())
         raw_img = b"\x89PNG\r\n\x1a\n"
+        small_img = b"\x89PNG-small"
         image_b64 = _b64(raw_img)
         mock_stt = MagicMock()
         mock_stt.transcribe.return_value = "transcribed text"
@@ -163,13 +167,128 @@ class TestPipelineProviderCalls:
             patch.object(_pipeline, "_make_stt", return_value=mock_stt),
             patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
             patch.object(_pipeline, "_make_tts", return_value=mock_tts),
-            patch.object(_grounding, "locate", return_value={"steps": fake_steps}) as mock_locate,
+            patch.object(
+                _imaging, "downscale_png", return_value=(small_img, (100, 80), (35, 28))
+            ) as mock_downscale,
+            patch.object(_grounding, "locate", return_value={"steps": fake_steps, "raw": "raw"}) as mock_locate,
         ):
             events_list, final = _collect(_pipeline.run(audio_b64, image_b64, {}))
 
-        # grounding.locate must receive the decoded PNG bytes and the transcript
-        mock_locate.assert_called_once_with(mock_vlm, raw_img, "transcribed text")
+        # downscale must be called on the decoded original image
+        mock_downscale.assert_called_once_with(raw_img)
+        # grounding.locate must receive the *downscaled* image and the transcript
+        mock_locate.assert_called_once_with(
+            mock_vlm, small_img, "transcribed text", system_prompt=None
+        )
         assert final["steps"] == fake_steps
+
+    def test_pipeline_emits_image_downscaled_event(self):
+        """Grounding mode should emit an image_downscaled event before grounding runs."""
+        from och_sidecar import grounding as _grounding
+        from och_sidecar import imaging as _imaging
+
+        audio_b64 = _b64(_fake_wav())
+        image_b64 = _b64(b"\x89PNG\r\n\x1a\nfake")
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "do it"
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+            patch.object(_imaging, "downscale_png", return_value=(b"s", (200, 100), (71, 35))),
+            patch.object(_grounding, "locate", return_value={"steps": [{"x": 0.5, "y": 0.5, "explanation": "ok"}], "raw": "r"}),
+        ):
+            events, final = _collect(_pipeline.run(audio_b64, image_b64, {}))
+
+        names = [e for e, _ in events]
+        assert "image_downscaled" in names
+        payload = dict(events)["image_downscaled"]
+        assert payload["orig_size"] == [200, 100]
+        assert payload["new_size"] == [71, 35]
+        # image_b64 stays out unless debug mode is on
+        assert "image_b64" not in payload
+
+    def test_debug_mode_emits_caption_and_attaches_debug(self):
+        """With debug enabled the pipeline should call grounding.caption and
+        attach a `debug` block to the final result."""
+        from och_sidecar import grounding as _grounding
+        from och_sidecar import imaging as _imaging
+
+        audio_b64 = _b64(_fake_wav())
+        image_b64 = _b64(b"\x89PNG")
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "what is this"
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+            patch.object(_imaging, "downscale_png", return_value=(b"tiny", (100, 80), (35, 28))),
+            patch.object(_grounding, "caption", return_value="Settings page open") as mock_caption,
+            patch.object(
+                _grounding,
+                "locate",
+                return_value={"steps": [{"x": 0.5, "y": 0.5, "explanation": "ok"}], "raw": "raw output"},
+            ),
+        ):
+            events, final = _collect(
+                _pipeline.run(audio_b64, image_b64, {"debug": {"enabled": True}})
+            )
+
+        names = [e for e, _ in events]
+        assert "caption_start" in names
+        assert "caption_done" in names
+        caption_done = dict(events)["caption_done"]
+        assert caption_done["caption"] == "Settings page open"
+        # final.debug block is populated
+        assert "debug" in final
+        assert final["debug"]["caption"] == "Settings page open"
+        assert final["debug"]["grounding_raw"] == "raw output"
+        assert "screenshot_b64" in final["debug"]
+        assert final["debug"]["screenshot_b64"]
+        mock_caption.assert_called_once()
+
+    def test_system_prompts_passed_to_grounding(self):
+        """When `system_prompts.grounding` is set in settings, locate() gets it."""
+        from och_sidecar import grounding as _grounding
+        from och_sidecar import imaging as _imaging
+
+        audio_b64 = _b64(_fake_wav())
+        image_b64 = _b64(b"\x89PNG")
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "click"
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+            patch.object(_imaging, "downscale_png", return_value=(b"s", (10, 10), (4, 4))),
+            patch.object(
+                _grounding,
+                "locate",
+                return_value={"steps": [{"x": 0.5, "y": 0.5, "explanation": "ok"}], "raw": ""},
+            ) as mock_locate,
+        ):
+            _collect(
+                _pipeline.run(
+                    audio_b64,
+                    image_b64,
+                    {"system_prompts": {"grounding": "CUSTOM"}},
+                )
+            )
+
+        kwargs = mock_locate.call_args.kwargs
+        assert kwargs.get("system_prompt") == "CUSTOM"
 
     def test_tts_receives_vlm_answer(self):
         audio_b64 = _b64(_fake_wav())
