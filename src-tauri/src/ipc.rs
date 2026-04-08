@@ -1,7 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tauri::State;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::platform::{self, Permissions as PermTrait};
+use crate::AppState;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Permissions {
@@ -20,18 +23,24 @@ pub fn get_permissions() -> AppResult<Permissions> {
     })
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SidecarHealth {
     pub ok: bool,
     pub version: Option<String>,
 }
 
 #[tauri::command]
-pub fn ping_sidecar() -> AppResult<SidecarHealth> {
-    // P1 wires this to the real sidecar over stdio JSON-RPC. P0 returns a stub
-    // so the settings page renders without errors.
-    Ok(SidecarHealth {
-        ok: false,
-        version: None,
-    })
+pub async fn ping_sidecar(state: State<'_, AppState>) -> AppResult<SidecarHealth> {
+    let guard = state.sidecar.lock().await;
+    let Some(sidecar) = guard.as_ref().cloned() else {
+        return Ok(SidecarHealth {
+            ok: false,
+            version: None,
+        });
+    };
+    drop(guard);
+
+    let value = sidecar.call("ping", json!({})).await?;
+    let parsed: SidecarHealth = serde_json::from_value(value).map_err(AppError::from)?;
+    Ok(parsed)
 }

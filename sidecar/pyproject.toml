@@ -1,0 +1,34 @@
+[project]
+name = "och-sidecar"
+version = "0.0.1"
+description = "open-clicker-helper Python sidecar (STT/TTS/LLM/VLM providers + pipeline)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.9",
+  "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+# Heavy ML extras are opt-in so CI can run pytest without downloading torch.
+mlx = [
+  "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+faster-whisper = ["faster-whisper>=1.0"]
+kokoro = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
+test = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+och-sidecar = "och_sidecar.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["och_sidecar"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
