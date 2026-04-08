@@ -64,6 +64,16 @@ impl OverlayWindow for MacOverlay {
 
             // Don't show in window list / Mission Control / cmd-tab.
             let _: () = msg_send![ns_window, setHidesOnDeactivate: false];
+
+            // True transparency: WKWebView paints its own white background
+            // independently of the NSWindow transparency setting. Disable it.
+            let _: () = msg_send![ns_window, setOpaque: false];
+            let content_view: *mut AnyObject = msg_send![ns_window, contentView];
+            if !content_view.is_null() {
+                // setDrawsBackground:NO — the WKWebView-specific call that
+                // prevents the white fill. transparent:true alone is not enough.
+                let _: () = msg_send![content_view, setDrawsBackground: false];
+            }
         }
 
         tracing::info!("overlay window configured for click-through topmost");
