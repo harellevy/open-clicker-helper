@@ -8,7 +8,7 @@ Hold a hotkey, ask a question out loud, and it will:
 3. Animate a cursor on a transparent overlay showing you the path.
 4. Read the answer back to you.
 
-Inspired by [clicky.so](https://www.clicky.so/), but open source and works fully offline with local models (Ollama, mlx-whisper, Kokoro).
+Open source and works fully offline with local models (Ollama, mlx-whisper, Kokoro).
 
 ## Status
 
