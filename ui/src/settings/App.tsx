@@ -1,66 +1,84 @@
 import { useEffect, useState } from "react";
-import { api, type Permissions, type SidecarHealth } from "@/lib/api";
+import { type Settings, api, defaultSettings } from "@/lib/api";
+import { Setup } from "./pages/Setup";
+import { PermissionsPage } from "./pages/Permissions";
+import { ProvidersPage } from "./pages/Providers";
+import { HotkeysPage } from "./pages/Hotkeys";
+
+type Page = "permissions" | "providers" | "hotkeys";
 
 export function App() {
-  const [permissions, setPermissions] = useState<Permissions | null>(null);
-  const [health, setHealth] = useState<SidecarHealth | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [page, setPage] = useState<Page>("permissions");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [perms, h] = await Promise.all([
-          api.getPermissions(),
-          api.pingSidecar().catch(() => ({ ok: false, version: null })),
-        ]);
-        if (cancelled) return;
-        setPermissions(perms);
-        setHealth(h);
-      } catch (e) {
-        if (!cancelled) setError(String(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    api
+      .getSettings()
+      .then(setSettings)
+      .catch(() => setSettings(defaultSettings()))
+      .finally(() => setLoading(false));
   }, []);
+
+  function handleSettings(updated: Settings) {
+    setSettings(updated);
+    api.saveSettings(updated).catch(console.error);
+  }
+
+  if (loading || !settings) {
+    return <div className="app app--loading">Loading…</div>;
+  }
+
+  // Show the first-run wizard until setup_complete is true.
+  if (!settings.setup_complete) {
+    return (
+      <div className="app">
+        <header className="app__header">open-clicker-helper — Setup</header>
+        <Setup settings={settings} onComplete={setSettings} />
+      </div>
+    );
+  }
 
   return (
     <div className="app">
       <header className="app__header">open-clicker-helper</header>
-      <main className="app__main">
-        <h2>Permissions</h2>
-        {error && <p style={{ color: "crimson" }}>{error}</p>}
-        {permissions ? (
-          <ul>
-            <li>
-              Screen recording <StatusBadge value={permissions.screen_recording} />
-            </li>
-            <li>
-              Accessibility <StatusBadge value={permissions.accessibility} />
-            </li>
-            <li>
-              Microphone <StatusBadge value={permissions.microphone} />
-            </li>
-          </ul>
-        ) : (
-          <p>Loading…</p>
-        )}
-
-        <h2>Sidecar</h2>
-        {health ? (
-          <p>
-            {health.ok ? `online (${health.version ?? "unknown"})` : "offline"}
-          </p>
-        ) : (
-          <p>checking…</p>
-        )}
-      </main>
+      <div className="app__body">
+        <nav className="sidebar">
+          <NavItem id="permissions" label="Permissions" current={page} onClick={setPage} />
+          <NavItem id="providers" label="Providers" current={page} onClick={setPage} />
+          <NavItem id="hotkeys" label="Hotkey" current={page} onClick={setPage} />
+        </nav>
+        <main className="main-content">
+          {page === "permissions" && <PermissionsPage />}
+          {page === "providers" && (
+            <ProvidersPage settings={settings} onChange={handleSettings} />
+          )}
+          {page === "hotkeys" && (
+            <HotkeysPage settings={settings} onChange={handleSettings} />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
 
-function StatusBadge({ value }: { value: "granted" | "denied" | "unknown" }) {
-  return <span className={`status status--${value}`}>{value}</span>;
+function NavItem({
+  id,
+  label,
+  current,
+  onClick,
+}: {
+  id: Page;
+  label: string;
+  current: Page;
+  onClick: (p: Page) => void;
+}) {
+  return (
+    <button
+      className={`nav-item ${current === id ? "nav-item--active" : ""}`}
+      onClick={() => onClick(id)}
+    >
+      {label}
+    </button>
+  );
 }
