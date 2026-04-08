@@ -92,6 +92,14 @@ def _get_system_prompts(settings: dict[str, Any]) -> dict[str, Any]:
     return sp
 
 
+def _get_grounding_opts(settings: dict[str, Any]) -> dict[str, Any]:
+    """Read the `grounding` block from settings (knobs like `refine`)."""
+    g = settings.get("grounding") or {}
+    if not isinstance(g, dict):
+        return {}
+    return g
+
+
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
 def run(
@@ -106,6 +114,11 @@ def run(
     prompts = _get_system_prompts(settings)
     grounding_prompt = prompts.get("grounding") or None
     caption_prompt = prompts.get("caption") or None
+    refine_prompt = prompts.get("refine") or None
+    grounding_opts = _get_grounding_opts(settings)
+    # Two-pass crop-and-refine defaults on — a single extra VLM call per
+    # step massively tightens coordinate accuracy on full-res screenshots.
+    refine_enabled = bool(grounding_opts.get("refine", True))
 
     audio_bytes = base64.b64decode(audio_b64)
     image_bytes = base64.b64decode(image_b64) if image_b64 else None
@@ -121,6 +134,28 @@ def run(
     timings["stt_ms"] = _elapsed_ms(stt_t0)
     yield ("stt_done", {"transcript": transcript, "elapsed_ms": timings["stt_ms"]})
     logger.info("STT: %r (%d ms)", transcript, timings["stt_ms"])
+
+    # ── Early bail-out: nothing was said ─────────────────────────────────────
+    # The user held the hotkey but STT returned empty/whitespace — usually an
+    # accidental tap or pure-silence capture. Without a question, grounding
+    # has nothing to aim at and an image alone would just burn the VLM on a
+    # noop. Short-circuit with a ``cancelled`` result so the overlay can show
+    # a brief message and the user can retry.
+    if not transcript.strip():
+        timings["total_ms"] = _elapsed_ms(pipeline_start)
+        logger.info("empty transcript — cancelling pipeline")
+        yield (
+            "result",
+            {
+                "transcript": "",
+                "answer": "",
+                "audio_b64": "",
+                "steps": [],
+                "timings": timings,
+                "cancelled": "empty_transcript",
+            },
+        )
+        return
 
     steps: list[dict[str, Any]] = []
     answer: str = ""
@@ -199,12 +234,6 @@ def run(
         timings["grounding_ms"] = _elapsed_ms(grounding_t0)
 
         steps = result.get("steps", [])
-        if steps:
-            answer = steps[0]["explanation"]
-            if len(steps) > 1:
-                answer = f"I'll do this in {len(steps)} steps. " + answer
-        else:
-            answer = "I couldn't find where to click for that."
 
         grounding_event: dict[str, Any] = {
             "steps": steps,
@@ -214,6 +243,69 @@ def run(
             grounding_event["raw"] = result.get("raw", "")
         yield ("grounding_done", grounding_event)
         logger.info("Grounding: %d steps (%d ms)", len(steps), timings["grounding_ms"])
+
+        # ── Refinement pass (two-pass crop-and-refine) ───────────────────
+        # The first pass ran on the downscaled image (~1/8 area) which is
+        # fast but loses pixel precision. Now for each rough target, crop
+        # a window from the FULL-resolution screenshot around that point
+        # and ask the VLM to pinpoint the exact centre. Refined coords are
+        # mapped back to full-image normalised space.
+        rough_steps = list(steps)  # copy so debug can compare
+        if steps and refine_enabled:
+            refine_t0 = time.monotonic()
+            yield ("refine_start", {"count": len(steps)})
+            refined_steps: list[dict[str, Any]] = []
+            for i, step in enumerate(steps):
+                crop_result = _imaging.crop_around(
+                    image_bytes, step["x"], step["y"]
+                )
+                if crop_result is None:
+                    refined_steps.append(step)
+                    continue
+                crop_png, (cx0, cy0, cw, ch) = crop_result
+                refined = _grounding.refine(
+                    vlm,
+                    crop_png,
+                    transcript,
+                    system_prompt=refine_prompt,
+                )
+                if refined is None:
+                    refined_steps.append(step)
+                    continue
+                # Map normalised-within-crop → normalised-in-full-image.
+                full_x = cx0 + refined["x"] * cw
+                full_y = cy0 + refined["y"] * ch
+                refined_steps.append(
+                    {
+                        "x": max(0.0, min(1.0, full_x)),
+                        "y": max(0.0, min(1.0, full_y)),
+                        # Keep the first-pass explanation — it describes the
+                        # *element*, which is what the user sees; the refine
+                        # call explains only the precise pixel.
+                        "explanation": step.get("explanation", ""),
+                    }
+                )
+                logger.info(
+                    "refine step %d: (%.3f, %.3f) → (%.3f, %.3f)",
+                    i,
+                    step["x"],
+                    step["y"],
+                    refined_steps[-1]["x"],
+                    refined_steps[-1]["y"],
+                )
+            timings["refine_ms"] = _elapsed_ms(refine_t0)
+            steps = refined_steps
+            yield (
+                "refine_done",
+                {"steps": steps, "elapsed_ms": timings["refine_ms"]},
+            )
+
+        if steps:
+            answer = steps[0]["explanation"]
+            if len(steps) > 1:
+                answer = f"I'll do this in {len(steps)} steps. " + answer
+        else:
+            answer = "I couldn't find where to click for that."
 
         if debug_enabled:
             debug_payload.update(
@@ -225,6 +317,7 @@ def run(
                     "new_bytes": len(image_for_vlm),
                     "grounding_raw": result.get("raw", ""),
                     "steps": steps,
+                    "rough_steps": rough_steps,
                 }
             )
     else:

@@ -166,3 +166,70 @@ class TestLocate:
         second_kwargs = vlm.complete.call_args_list[1].kwargs
         assert first_kwargs.get("json_schema") is _grounding.GROUNDING_JSON_SCHEMA
         assert second_kwargs.get("json_schema") is _grounding.GROUNDING_JSON_SCHEMA
+
+
+# ── refine() ─────────────────────────────────────────────────────────────────
+
+class TestRefine:
+    """Second-pass refinement on a zoomed crop — the VLM is asked for a
+    single precise (x, y) inside the crop's normalised coordinate space."""
+
+    def _make_vlm(self, response: str):
+        mock = MagicMock()
+        mock.complete.return_value = response
+        return mock
+
+    def test_parses_single_point(self):
+        vlm = self._make_vlm('{"x": 0.42, "y": 0.77, "explanation": "the button"}')
+        out = _grounding.refine(vlm, b"crop", "click save")
+        assert out is not None
+        assert out["x"] == pytest.approx(0.42)
+        assert out["y"] == pytest.approx(0.77)
+        assert out["explanation"] == "the button"
+
+    def test_accepts_steps_wrapper_unwrap(self):
+        """Some models ignore the single-point instruction and reply with
+        `{"steps": [...]}` anyway. We unwrap the first entry."""
+        vlm = self._make_vlm(
+            '{"steps": [{"x": 0.2, "y": 0.9, "explanation": "ok"}]}'
+        )
+        out = _grounding.refine(vlm, b"crop", "click")
+        assert out is not None
+        assert out["x"] == pytest.approx(0.2)
+        assert out["y"] == pytest.approx(0.9)
+
+    def test_coords_clamped(self):
+        vlm = self._make_vlm('{"x": 1.8, "y": -0.3, "explanation": "oob"}')
+        out = _grounding.refine(vlm, b"crop", "click")
+        assert out is not None
+        assert out["x"] == pytest.approx(1.0)
+        assert out["y"] == pytest.approx(0.0)
+
+    def test_returns_none_on_garbage(self):
+        """Refinement is best-effort — on parse failure we return None so
+        the caller falls back to the rough coordinate rather than fail
+        the whole request."""
+        vlm = self._make_vlm("not json at all")
+        out = _grounding.refine(vlm, b"crop", "click")
+        assert out is None
+
+    def test_returns_none_on_provider_error(self):
+        vlm = MagicMock()
+        vlm.complete.side_effect = RuntimeError("vlm exploded")
+        out = _grounding.refine(vlm, b"crop", "click")
+        assert out is None
+
+    def test_forwards_refine_schema(self):
+        vlm = self._make_vlm('{"x": 0.5, "y": 0.5, "explanation": "ok"}')
+        _grounding.refine(vlm, b"crop", "click")
+        kwargs = vlm.complete.call_args.kwargs
+        assert kwargs.get("json_schema") is _grounding.REFINE_JSON_SCHEMA
+
+    def test_custom_system_prompt(self):
+        vlm = self._make_vlm('{"x": 0.5, "y": 0.5, "explanation": "ok"}')
+        _grounding.refine(
+            vlm, b"crop", "click", system_prompt="ONLY THIS PROMPT"
+        )
+        prompt = vlm.complete.call_args.args[0]
+        assert "ONLY THIS PROMPT" in prompt
+        assert _grounding.DEFAULT_REFINE_SYSTEM_PROMPT not in prompt

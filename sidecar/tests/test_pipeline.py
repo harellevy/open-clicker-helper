@@ -273,17 +273,26 @@ class TestPipelineProviderCalls:
             patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
             patch.object(_pipeline, "_make_tts", return_value=mock_tts),
             patch.object(_imaging, "downscale_png", return_value=(b"s", (10, 10), (4, 4))),
+            patch.object(_imaging, "crop_around", return_value=None),
             patch.object(
                 _grounding,
                 "locate",
                 return_value={"steps": [{"x": 0.5, "y": 0.5, "explanation": "ok"}], "raw": ""},
             ) as mock_locate,
+            patch.object(
+                _grounding,
+                "refine",
+                return_value=None,
+            ),
         ):
             _collect(
                 _pipeline.run(
                     audio_b64,
                     image_b64,
-                    {"system_prompts": {"grounding": "CUSTOM"}},
+                    {
+                        "system_prompts": {"grounding": "CUSTOM"},
+                        "grounding": {"refine": False},
+                    },
                 )
             )
 
@@ -379,6 +388,177 @@ class TestProviderCache:
             b = _pipeline._make_vlm({})
         assert a is b
         assert MockVlm.call_count == 1
+
+
+class TestEmptyTranscriptCancels:
+    """When STT returns nothing, the pipeline should short-circuit before
+    calling grounding/VLM/TTS and emit a `cancelled` result so the overlay
+    can show a brief notice."""
+
+    def _run_with_transcript(self, transcript: str, image_b64: str | None = None):
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = transcript
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+        ):
+            events, final = _collect(
+                _pipeline.run(_b64(_fake_wav()), image_b64, {})
+            )
+        return events, final, mock_stt, mock_vlm, mock_tts
+
+    def test_empty_transcript_short_circuits(self):
+        events, final, _stt, mock_vlm, mock_tts = self._run_with_transcript("")
+        assert final.get("cancelled") == "empty_transcript"
+        assert final.get("steps") == []
+        assert final.get("audio_b64") == ""
+        # Neither the VLM nor the TTS should have been called.
+        mock_vlm.complete.assert_not_called()
+        mock_tts.synthesize.assert_not_called()
+
+    def test_whitespace_only_transcript_short_circuits(self):
+        _events, final, _stt, mock_vlm, mock_tts = self._run_with_transcript("   \n  ")
+        assert final.get("cancelled") == "empty_transcript"
+        mock_vlm.complete.assert_not_called()
+        mock_tts.synthesize.assert_not_called()
+
+    def test_empty_transcript_in_grounding_mode_still_cancels(self):
+        """Even with a screenshot present, no speech means no task — we
+        must not burn the VLM on a meaningless image-only request."""
+        _events, final, _stt, mock_vlm, mock_tts = self._run_with_transcript(
+            "", image_b64=_b64(b"\x89PNG")
+        )
+        assert final.get("cancelled") == "empty_transcript"
+        mock_vlm.complete.assert_not_called()
+        mock_tts.synthesize.assert_not_called()
+
+    def test_nonempty_transcript_still_runs_full_pipeline(self):
+        """Sanity check — a normal transcript should still hit VLM and TTS."""
+        _events, final, _stt, mock_vlm, mock_tts = self._run_with_transcript(
+            "hello"
+        )
+        assert "cancelled" not in final
+        mock_vlm.complete.assert_called()
+        mock_tts.synthesize.assert_called()
+
+
+class TestRefinementPass:
+    """Two-pass crop-and-refine grounding — the first call runs on the
+    downscaled image for speed, the second uses a full-res crop for
+    pixel-accurate coordinates."""
+
+    def _run_refine(
+        self,
+        refine_result: dict | None,
+        crop_rect: tuple[float, float, float, float] = (0.2, 0.3, 0.4, 0.4),
+        settings: dict | None = None,
+    ):
+        from och_sidecar import grounding as _grounding
+        from och_sidecar import imaging as _imaging
+
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "click save"
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+            patch.object(
+                _imaging,
+                "downscale_png",
+                return_value=(b"small", (2000, 1500), (707, 530)),
+            ),
+            patch.object(
+                _imaging,
+                "crop_around",
+                return_value=(b"crop-png", crop_rect),
+            ) as mock_crop,
+            patch.object(
+                _grounding,
+                "locate",
+                return_value={
+                    "steps": [{"x": 0.5, "y": 0.5, "explanation": "save button"}],
+                    "raw": "first pass",
+                },
+            ) as mock_locate,
+            patch.object(
+                _grounding, "refine", return_value=refine_result
+            ) as mock_refine,
+        ):
+            events, final = _collect(
+                _pipeline.run(
+                    _b64(_fake_wav()),
+                    _b64(b"\x89PNG-full-res"),
+                    settings or {},
+                )
+            )
+
+        return events, final, mock_crop, mock_locate, mock_refine
+
+    def test_refine_remaps_coords_to_full_image(self):
+        """When refine returns (0.5, 0.5) within a crop that occupies
+        (x0=0.2, y0=0.3, w=0.4, h=0.4) of the full image, the final
+        coordinate should be (0.2 + 0.5*0.4, 0.3 + 0.5*0.4) = (0.4, 0.5)."""
+        events, final, _crop, _locate, mock_refine = self._run_refine(
+            refine_result={"x": 0.5, "y": 0.5, "explanation": "exact centre"},
+            crop_rect=(0.2, 0.3, 0.4, 0.4),
+        )
+        mock_refine.assert_called_once()
+        assert final["steps"][0]["x"] == pytest.approx(0.4)
+        assert final["steps"][0]["y"] == pytest.approx(0.5)
+        # The explanation from the first pass is preserved — it describes
+        # the element; the refine call explains only the pixel.
+        assert final["steps"][0]["explanation"] == "save button"
+
+    def test_refine_failure_falls_back_to_rough(self):
+        """If refine returns None (parse failure, provider error), the
+        rough coordinate from the first pass must be used unchanged."""
+        events, final, _crop, _locate, _refine = self._run_refine(
+            refine_result=None
+        )
+        assert final["steps"][0]["x"] == pytest.approx(0.5)
+        assert final["steps"][0]["y"] == pytest.approx(0.5)
+
+    def test_refine_passes_full_res_image_to_crop(self):
+        """`crop_around` must be called with the ORIGINAL image bytes, not
+        the downscaled version — the whole point is that the second pass
+        works at full pixel resolution."""
+        events, final, mock_crop, *_ = self._run_refine(
+            refine_result={"x": 0.5, "y": 0.5, "explanation": "ok"}
+        )
+        # crop_around(png_bytes, norm_x, norm_y, ...) — first arg is bytes
+        args = mock_crop.call_args.args
+        assert args[0] == b"\x89PNG-full-res"
+        # The rough normalised coord from the first pass
+        assert args[1] == pytest.approx(0.5)
+        assert args[2] == pytest.approx(0.5)
+
+    def test_refine_pass_emits_events(self):
+        events, _final, *_ = self._run_refine(
+            refine_result={"x": 0.5, "y": 0.5, "explanation": "ok"}
+        )
+        names = [e for e, _ in events]
+        assert "refine_start" in names
+        assert "refine_done" in names
+
+    def test_refine_disabled_skips_second_pass(self):
+        """When `grounding.refine` is false the refine call must not happen."""
+        _events, final, _crop, _locate, mock_refine = self._run_refine(
+            refine_result={"x": 0.9, "y": 0.9, "explanation": "ok"},
+            settings={"grounding": {"refine": False}},
+        )
+        mock_refine.assert_not_called()
+        # Rough coords pass through.
+        assert final["steps"][0]["x"] == pytest.approx(0.5)
+        assert final["steps"][0]["y"] == pytest.approx(0.5)
 
 
 class TestOllamaTimeout:

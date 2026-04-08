@@ -35,6 +35,10 @@ pub struct Settings {
     /// User-editable system prompts, one per stage of the pipeline.
     #[serde(default)]
     pub system_prompts: SystemPrompts,
+
+    /// Grounding-pipeline knobs (two-pass refinement toggle, etc.).
+    #[serde(default)]
+    pub grounding: GroundingSettings,
 }
 
 fn default_hotkey() -> String {
@@ -51,6 +55,29 @@ impl Default for Settings {
             tts: TtsSettings::default(),
             debug: DebugSettings::default(),
             system_prompts: SystemPrompts::default(),
+            grounding: GroundingSettings::default(),
+        }
+    }
+}
+
+/// Grounding-pipeline toggles — two-pass refinement, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundingSettings {
+    /// When true (default), run a second VLM pass on a full-resolution crop
+    /// around each rough target to tighten pixel accuracy. Costs roughly one
+    /// extra VLM call per step; disable if latency matters more than accuracy.
+    #[serde(default = "grounding_default_refine")]
+    pub refine: bool,
+}
+
+fn grounding_default_refine() -> bool {
+    true
+}
+
+impl Default for GroundingSettings {
+    fn default() -> Self {
+        Self {
+            refine: grounding_default_refine(),
         }
     }
 }
@@ -275,5 +302,21 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.debug.enabled);
         assert!(s.system_prompts.grounding.is_empty());
+        // New grounding.refine knob defaults to true — older stored settings
+        // should still come back with refinement enabled.
+        assert!(s.grounding.refine);
+    }
+
+    #[test]
+    fn grounding_refine_defaults_on() {
+        let s = Settings::default();
+        assert!(s.grounding.refine);
+    }
+
+    #[test]
+    fn grounding_refine_can_be_disabled_in_json() {
+        let json = r#"{"grounding":{"refine":false}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.grounding.refine);
     }
 }

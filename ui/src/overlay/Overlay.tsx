@@ -75,7 +75,6 @@ const DEBUG_IDLE: DebugState = {
 export function Overlay() {
   const [hud, setHud] = useState<HudState>(IDLE);
   const [groundingSteps, setGroundingSteps] = useState<GroundingStep[]>([]);
-  const [groundingTranscript, setGroundingTranscript] = useState("");
   const [settings, setSettings] = useState<Settings>(defaultSettings());
   const [debug, setDebug] = useState<DebugState>(DEBUG_IDLE);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -145,10 +144,21 @@ export function Overlay() {
 
     subs.push(
       onPipelineResult(async (r: PipelineResult) => {
+        // The sidecar short-circuited (e.g. silence → empty STT). Show a
+        // brief notice in the HUD and skip the rest of the result-handling
+        // (no steps, no audio playback).
+        if (r.cancelled === "empty_transcript") {
+          setHud({
+            phase: "result",
+            transcript: "",
+            answer: "I didn't catch anything — try again.",
+          });
+          scheduleAutoDismiss();
+          return;
+        }
         setHud({ phase: "result", transcript: r.transcript, answer: r.answer });
         if (r.steps && r.steps.length > 0) {
           setGroundingSteps(r.steps);
-          setGroundingTranscript(r.transcript);
         }
         // Final debug-state fill from the result payload (covers cases
         // where the progress relay dropped a frame).
@@ -257,12 +267,11 @@ export function Overlay() {
 
   return (
     <>
-      {/* SVG cursor-path annotation with iterative click loop (P4.1) */}
+      {/* SVG target markers — the app points, the user clicks. */}
       {hasGrounding && (
         <Annotation
           steps={groundingSteps}
-          transcript={groundingTranscript}
-          onDone={() => { setGroundingSteps([]); setGroundingTranscript(""); }}
+          onDone={() => setGroundingSteps([])}
         />
       )}
 
