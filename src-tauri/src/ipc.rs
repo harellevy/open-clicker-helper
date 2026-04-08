@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::error::{AppError, AppResult};
 use crate::platform;
@@ -134,6 +134,38 @@ pub fn capture_screen() -> AppResult<Option<String>> {
             Ok(None)
         }
     }
+}
+
+/// Synthesise a left-click at normalised coordinates (0.0–1.0) on the primary
+/// monitor.  Converts to physical pixels, then posts CGEvent mouse-down/up.
+///
+/// The overlay must be click-through for the synthesised events to reach the
+/// target application — this is guaranteed by `make_click_through_topmost`.
+#[tauri::command]
+pub async fn click_at_normalized(app: tauri::AppHandle, x: f64, y: f64) -> AppResult<()> {
+    let (px, py) = resolve_px(&app, x, y);
+    tracing::info!("click_at_normalized ({x:.3}, {y:.3}) → pixels ({px}, {py})");
+
+    // Run the blocking CGEvent calls off the async executor.
+    tokio::task::spawn_blocking(move || platform::current().mouse().click(px, py))
+        .await
+        .map_err(|e| AppError::Platform(format!("spawn_blocking click: {e}")))?
+}
+
+/// Convert normalised (0–1) coords to physical pixels using the primary monitor.
+/// Falls back to a 1440×900 logical size when the monitor cannot be queried.
+fn resolve_px(app: &tauri::AppHandle, x: f64, y: f64) -> (f64, f64) {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return (x * 1440.0, y * 900.0);
+    };
+    let Ok(Some(monitor)) = window.primary_monitor() else {
+        return (x * 1440.0, y * 900.0);
+    };
+    let size = monitor.size();
+    (
+        (x.clamp(0.0, 1.0) * f64::from(size.width)).round(),
+        (y.clamp(0.0, 1.0) * f64::from(size.height)).round(),
+    )
 }
 
 /// Generic JSON-RPC pass-through to the Python sidecar.

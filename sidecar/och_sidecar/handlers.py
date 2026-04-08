@@ -126,6 +126,34 @@ def _pipeline_run(params: dict[str, Any]):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Grounding — re-ground a single question against a new screenshot (P4.1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _grounding_locate(params: dict[str, Any]) -> dict[str, Any]:
+    """Re-ground a question against a (new) screenshot without running STT/TTS.
+
+    Used by the iterative multi-step loop: after each click Rust captures a
+    fresh screenshot and calls this to re-ground the next step.
+
+    params:
+        image_b64  – base-64-encoded PNG screenshot (required)
+        question   – the user's original transcribed question (required)
+        settings   – provider settings dict, optional
+    """
+    import base64
+
+    from . import grounding as _grounding
+    from .pipeline import _make_vlm
+
+    image_bytes = base64.b64decode(params["image_b64"])
+    question = params["question"]
+    settings = params.get("settings", {})
+
+    vlm = _make_vlm(settings)
+    return _grounding.locate(vlm, image_bytes, question)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Registry
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -146,4 +174,6 @@ def build_dispatcher() -> Dispatcher:
         "providers.test": _providers_test,
         # Pipeline
         "pipeline.run": _pipeline_run,
+        # Iterative grounding (P4.1)
+        "grounding.locate": _grounding_locate,
     }

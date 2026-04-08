@@ -73,6 +73,7 @@ pub fn run() {
             ipc::ping_sidecar,
             ipc::sidecar_call,
             ipc::capture_screen,
+            ipc::click_at_normalized,
         ])
         .setup(|app| {
             // Configure the transparent overlay window with native macOS flags.

@@ -52,9 +52,10 @@ pub trait ScreenCapture {
     fn capture_focused_window(&self) -> AppResult<Vec<u8>>;
 }
 
-/// Stub today; cpal-based recorder lands in P3.
 pub trait MouseTracker {
     fn current_position(&self) -> AppResult<(i32, i32)>;
+    /// Synthesise a left-button click at the given screen coordinates (pixels).
+    fn click(&self, x: f64, y: f64) -> AppResult<()>;
 }
 
 /// Aggregator returned by `current()`. Each method returns a fresh handle so

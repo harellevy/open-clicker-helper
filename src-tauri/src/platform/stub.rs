@@ -62,4 +62,8 @@ impl MouseTracker for StubMouse {
     fn current_position(&self) -> AppResult<(i32, i32)> {
         Ok((0, 0))
     }
+
+    fn click(&self, _x: f64, _y: f64) -> AppResult<()> {
+        Ok(()) // no-op on non-macOS
+    }
 }

@@ -31,6 +31,7 @@ const IDLE: HudState = { phase: "idle" };
 export function Overlay() {
   const [hud, setHud] = useState<HudState>(IDLE);
   const [groundingSteps, setGroundingSteps] = useState<GroundingStep[]>([]);
+  const [groundingTranscript, setGroundingTranscript] = useState("");
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scheduleAutoDismiss = useCallback(() => {
@@ -61,6 +62,7 @@ export function Overlay() {
         // Show grounding annotation if steps were returned
         if (r.steps && r.steps.length > 0) {
           setGroundingSteps(r.steps);
+          setGroundingTranscript(r.transcript);
         }
         scheduleAutoDismiss();
         if (r.audio_b64) {
@@ -86,11 +88,12 @@ export function Overlay() {
 
   return (
     <>
-      {/* SVG cursor-path annotation (P4: grounding results) */}
+      {/* SVG cursor-path annotation with iterative click loop (P4.1) */}
       {groundingSteps.length > 0 && (
         <Annotation
           steps={groundingSteps}
-          onDone={() => setGroundingSteps([])}
+          transcript={groundingTranscript}
+          onDone={() => { setGroundingSteps([]); setGroundingTranscript(""); }}
         />
       )}
 
