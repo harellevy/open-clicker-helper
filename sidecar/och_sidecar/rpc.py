@@ -98,6 +98,9 @@ class RpcServer:
             final: Any = None
             for event, payload in result:
                 if event == "result":
+                    # Emit as notification first so the UI's handleProgress can
+                    # transition to done/error, then send as the RPC response.
+                    self._send_notification(method, {"id": req_id, "event": "result", "payload": payload})
                     final = payload
                     break
                 self._send_notification(method, {"id": req_id, "event": event, "payload": payload})
