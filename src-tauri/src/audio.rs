@@ -108,12 +108,9 @@ impl VadState {
         let now_ms = self.start.elapsed().as_millis() as u64;
         let now_ms = now_ms.max(1); // reserve 0 for "unset"
         self.last_voiced_ms.store(now_ms, Ordering::Relaxed);
-        let _ = self.first_voiced_ms.compare_exchange(
-            0,
-            now_ms,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        );
+        let _ =
+            self.first_voiced_ms
+                .compare_exchange(0, now_ms, Ordering::Relaxed, Ordering::Relaxed);
     }
 }
 
