@@ -83,19 +83,17 @@ pub fn run() {
                 // default to white even when `transparent: true` is set.
                 let _ = overlay.set_background_color(Some(Color(0, 0, 0, 0)));
 
-                // DEBUG: bottom-half only so the screen is still usable.
-                // TODO(P5): restore full-screen once click-through is stable.
+                // Size overlay to the full primary monitor.
                 if let Some(monitor) = overlay.primary_monitor().ok().flatten() {
                     let size = monitor.size();
-                    let half_h = size.height / 2;
                     let _ = overlay.set_size(tauri::Size::Physical(tauri::PhysicalSize {
                         width: size.width,
-                        height: half_h,
+                        height: size.height,
                     }));
                     let _ =
                         overlay.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
                             x: 0,
-                            y: half_h as i32,
+                            y: 0,
                         }));
                 }
 
