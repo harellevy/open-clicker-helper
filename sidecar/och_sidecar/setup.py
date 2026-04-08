@@ -151,9 +151,12 @@ def download_vlm(
                 total = data.get("total")
                 if completed is not None and total and total > 0:
                     pct = int(completed / total * 100)
+                    mb_done = completed / (1024 * 1024)
+                    mb_total = total / (1024 * 1024)
+                    msg = f"{mb_done:.0f} / {mb_total:.0f} MB"
                     yield (
                         "progress",
-                        {"step": "vlm", "progress": pct, "message": status_msg},
+                        {"step": "vlm", "progress": pct, "message": msg},
                     )
                 else:
                     yield ("status", {"step": "vlm", "message": status_msg})
@@ -303,7 +306,14 @@ def _kokoro_voice_cached(voice: str) -> bool:
 
 def _uv_add(packages: str) -> None:
     """Install extra packages into the current uv environment."""
-    cmd = [sys.executable, "-m", "uv", "pip", "install", *packages.split()]
+    import shutil
+
+    uv_bin = shutil.which("uv")
+    if uv_bin:
+        cmd = [uv_bin, "pip", "install", *packages.split()]
+    else:
+        # Fall back to pip if uv is not on PATH.
+        cmd = [sys.executable, "-m", "pip", "install", *packages.split()]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr or result.stdout)
