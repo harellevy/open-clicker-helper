@@ -77,6 +77,20 @@ pub fn run() {
         .setup(|app| {
             // Configure the transparent overlay window with native macOS flags.
             if let Some(overlay) = app.get_webview_window("overlay") {
+                // Resize overlay to cover the primary monitor exactly.
+                if let Some(monitor) = overlay.primary_monitor().ok().flatten() {
+                    let size = monitor.size();
+                    let _ = overlay.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                        width: size.width,
+                        height: size.height,
+                    }));
+                    let _ =
+                        overlay.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                            x: 0,
+                            y: 0,
+                        }));
+                }
+
                 #[cfg(target_os = "macos")]
                 {
                     let configurator = platform::current().overlay();
