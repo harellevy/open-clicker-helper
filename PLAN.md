@@ -160,7 +160,7 @@ UI for re-configuring everything.
 3. **Vision LLM** — Ping Ollama; check + pull chosen model; `setup.download_vlm`
    streams NDJSON progress from `ollama pull`. OpenAI GPT-4o and Anthropic
    Claude as cloud fallbacks.
-4. **TTS** — Detect kokoro-onnx + voice model; "Download Kokoro" runs
+4. **TTS** — Detect kokoro + voice model; "Download Kokoro" runs
    `setup.download_tts`. OpenAI TTS as cloud fallback.
 5. **Hotkey** — Live key-recorder; writes accelerator string to the store.
 
@@ -265,7 +265,7 @@ Strategy:
 ## Key dependencies
 
 - **Rust:** `tauri` 2.x, `tauri-plugin-store`, `tauri-plugin-global-shortcut`, `tauri-plugin-shell`, `scap`, `cpal`, `objc2`, `objc2-app-kit`, `tokio`, `tracing`
-- **Python:** `pydantic`, `numpy`, `pillow`, `mlx-whisper`, `kokoro-onnx`, `sounddevice`, `openai`, `anthropic`
+- **Python:** `pydantic`, `numpy`, `pillow`, `mlx-whisper`, `kokoro`, `sounddevice`, `openai`, `anthropic`
 - **Frontend:** `react`, `react-router-dom`, `@tauri-apps/api`, `framer-motion` (or custom spring), `vite`
 
 ---

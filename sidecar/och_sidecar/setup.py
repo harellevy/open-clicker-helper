@@ -10,7 +10,7 @@ Dependency map
 --------------
 STT  → mlx-whisper  (Apple Silicon offline) or openai (cloud)
 VLM  → Ollama + qwen2.5-vl (offline) or openai / anthropic (cloud)
-TTS  → kokoro-onnx  (offline) or openai (cloud)
+TTS  → kokoro  (offline) or openai (cloud)
 """
 
 from __future__ import annotations
@@ -179,14 +179,14 @@ def download_vlm(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def check_tts(voice: str = "af_heart") -> dict[str, Any]:
-    """Return install + voice-model status for kokoro-onnx."""
+    """Return install + voice-model status for kokoro."""
     installed = _is_importable("kokoro")
     if not installed:
         return {
             "installed": False,
             "voice_ready": False,
             "voice": voice,
-            "message": "kokoro-onnx is not installed",
+            "message": "kokoro is not installed",
         }
     voice_ready = _kokoro_voice_cached(voice)
     return {
@@ -198,13 +198,13 @@ def check_tts(voice: str = "af_heart") -> dict[str, Any]:
 
 
 def download_tts(voice: str = "af_heart") -> Iterator[tuple[str, Any]]:
-    """Install kokoro-onnx and download the requested voice model."""
-    yield ("status", {"step": "tts", "message": "Checking kokoro-onnx install…"})
+    """Install kokoro and download the requested voice model."""
+    yield ("status", {"step": "tts", "message": "Checking kokoro install…"})
 
     if not _is_importable("kokoro"):
-        yield ("status", {"step": "tts", "message": "Installing kokoro-onnx via uv…"})
+        yield ("status", {"step": "tts", "message": "Installing kokoro via uv…"})
         try:
-            _uv_add("kokoro-onnx soundfile")
+            _uv_add("kokoro soundfile")
         except RuntimeError as e:
             yield ("result", {"ok": False, "step": "tts", "error": str(e)})
             return
@@ -269,7 +269,7 @@ def test_provider(provider_type: str, provider_id: str, config: dict[str, Any]) 
 
         elif provider_id == "kokoro":
             if not _is_importable("kokoro"):
-                return {"ok": False, "error": "kokoro-onnx not installed"}
+                return {"ok": False, "error": "kokoro not installed"}
 
         else:
             return {"ok": False, "error": f"Unknown provider: {provider_id}"}

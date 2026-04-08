@@ -1,4 +1,4 @@
-"""TTS provider: kokoro-onnx."""
+"""TTS provider: kokoro."""
 
 from __future__ import annotations
 
@@ -47,8 +47,8 @@ class KokoroTts(TtsProvider):
                 from kokoro import KPipeline  # type: ignore[import]
             except ImportError as exc:
                 raise ProviderError(
-                    "kokoro-onnx is not installed. "
-                    "Install with: uv pip install kokoro-onnx soundfile"
+                    "kokoro is not installed. "
+                    "Install with: uv pip install kokoro soundfile"
                 ) from exc
             self._pipeline = KPipeline(lang_code="a")
         return self._pipeline
@@ -57,7 +57,7 @@ class KokoroTts(TtsProvider):
         try:
             import importlib.util
             if importlib.util.find_spec("kokoro") is None:
-                return {"ok": False, "error": "kokoro-onnx is not installed"}
+                return {"ok": False, "error": "kokoro is not installed"}
             return {"ok": True}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
