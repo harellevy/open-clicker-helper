@@ -31,6 +31,12 @@ pub fn get_permissions() -> AppResult<Permissions> {
 /// Open a specific System Settings pane.
 ///
 /// `pane` values: `"screen_recording"`, `"accessibility"`, `"microphone"`.
+///
+/// `Shell::open` is deprecated in tauri-plugin-shell ≥2.1 in favour of
+/// `tauri-plugin-opener`, but we don't need the full opener plugin just for
+/// macOS System-Settings deep links. Suppress the deprecation lint here; we
+/// will migrate to the opener plugin in P5.
+#[allow(deprecated)]
 #[tauri::command]
 pub fn open_system_settings(app: tauri::AppHandle, pane: String) -> AppResult<()> {
     use tauri_plugin_shell::ShellExt;
