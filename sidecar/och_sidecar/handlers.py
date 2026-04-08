@@ -89,6 +89,7 @@ def _setup_download_tts(params: dict[str, Any]):
 def _providers_list(_params: dict[str, Any]) -> dict[str, list[str]]:
     return {
         "stt": ["mlx-whisper", "openai"],
+        "llm": [],
         "vlm": ["ollama", "openai", "anthropic"],
         "tts": ["kokoro", "openai"],
     }

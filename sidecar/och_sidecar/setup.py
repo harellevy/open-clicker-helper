@@ -15,7 +15,7 @@ TTS  → kokoro-onnx  (offline) or openai (cloud)
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import json
 import os
 import subprocess
