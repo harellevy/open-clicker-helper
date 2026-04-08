@@ -57,36 +57,21 @@ impl Default for Settings {
 
 /// Debug-mode toggle (plus a knob for how long each overlay stage sticks
 /// around, so users can tune the UX to their tolerance).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DebugSettings {
     #[serde(default)]
     pub enabled: bool,
 }
 
-impl Default for DebugSettings {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
-}
-
 /// System prompts the user can customise per stage of the pipeline. These
 /// strings are forwarded verbatim to the sidecar; an empty string means "use
 /// the sidecar's built-in default".
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SystemPrompts {
     #[serde(default)]
     pub grounding: String,
     #[serde(default)]
     pub caption: String,
-}
-
-impl Default for SystemPrompts {
-    fn default() -> Self {
-        Self {
-            grounding: String::new(),
-            caption: String::new(),
-        }
-    }
 }
 
 /// Speech-to-text configuration.
