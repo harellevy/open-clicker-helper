@@ -51,17 +51,15 @@ class OllamaVlm(VlmProvider):
 
     def complete(self, prompt: str, image_bytes: bytes | None = None) -> str:
         if image_bytes is not None:
+            # Ollama's /api/chat takes images as a sibling field to `content`,
+            # not as OpenAI-style structured content parts. The base64 string
+            # must be raw — no `data:image/...;base64,` prefix.
             img_b64 = base64.b64encode(image_bytes).decode()
             messages = [
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                        },
-                        {"type": "text", "text": prompt},
-                    ],
+                    "content": prompt,
+                    "images": [img_b64],
                 }
             ]
         else:

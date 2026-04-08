@@ -178,3 +178,25 @@ class TestOllamaVlm:
         mock_complete.assert_called_once_with("where is the button?", image_bytes=b"png bytes")
         assert "explanation" in result
         assert result["explanation"] == "top-left corner"
+
+    def test_complete_with_image_uses_ollama_images_field(self):
+        """Ollama /api/chat requires `images` as a sibling of `content`,
+        not OpenAI-style structured content parts. Pin the wire format so
+        we don't regress to a 400 'cannot unmarshal array into ... content
+        of type string'."""
+        import base64
+
+        vlm = OllamaVlm()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "ok"}}
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            vlm.complete("describe", image_bytes=b"fake png bytes")
+
+        sent_json = mock_post.call_args.kwargs["json"]
+        msg = sent_json["messages"][0]
+        assert msg["role"] == "user"
+        assert msg["content"] == "describe"
+        assert msg["images"] == [base64.b64encode(b"fake png bytes").decode()]
+        # Ollama expects raw base64, not a data: URI.
+        assert not msg["images"][0].startswith("data:")
