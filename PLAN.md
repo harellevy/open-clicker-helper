@@ -211,23 +211,31 @@ Real UI flows require re-grounding after each user action, not a single up-front
 
 Implemented in `Annotation.tsx` (`runIterative` loop) + `grounding.locate` RPC + `click_at_normalized` + `capture_screen`.
 
-**P4.2 — AX-tree fast path** *(planned)*
+**P4.2 — AX-tree fast path** *(infra landed; pipeline wiring follow-up)*
 
 macOS Accessibility API can locate standard UI elements (buttons, text fields, menus)
 faster and more reliably than VLM grounding for native apps — no GPU, no network,
 sub-millisecond latency. Vision falls back to VLM only when the AX tree has no match.
 
 Strategy:
-1. `platform/macos/ax.rs`: query the focused app's AX tree with `objc2` (`AXUIElement`).
-   Walk children, match by `AXRole` + `AXTitle`/`AXDescription` against the question keywords.
-   Return normalised `{x, y}` of the matched element's frame midpoint.
-2. `grounding.py` gains a `mode: "auto" | "ax" | "vlm"` dispatch:
-   - `"auto"` (default): try AX first; if confidence < threshold or no match, fall back to VLM.
-   - `"ax"`: AX only (fast, native apps only).
-   - `"vlm"`: VLM only (games, web content, non-native UIs).
-3. New `ax_locate` IPC command mirrors `capture_screen` — returns match or `null`.
-4. Settings: "Grounding mode" selector (auto / AX / VLM).
-5. `Annotation.tsx` unchanged — it receives the same `{steps}` regardless of backend.
+1. ✅ `platform/macos/ax.rs`: walks the focused app's AX tree via raw
+   `accessibility-sys` FFI (`AXUIElementCreateSystemWide` →
+   `kAXFocusedApplicationAttribute` → `kAXFocusedWindowAttribute` →
+   children). Depth- and width-capped; returns `AxCandidate { role, title,
+   description, x, y, width, height }` per clickable element in screen
+   pixels.
+2. ✅ New `ax_locate` IPC command mirrors `capture_screen` — returns the
+   candidate list (empty when no AX permission / wrong platform).
+3. ✅ Settings: "Grounding" page with mode selector (auto / AX-only /
+   VLM-only) plus the existing refinement toggle. Default is `auto`.
+4. *(follow-up)* `grounding.py` mode dispatch:
+   - `"auto"` (default): try AX first; if no match, fall back to VLM.
+   - `"ax"`: AX only — return empty steps rather than invoke the VLM.
+   - `"vlm"`: VLM only — legacy path, ignores `ax_candidates`.
+5. *(follow-up)* `pipeline.run` payload gains `ax_candidates` forwarded from
+   the Rust shell on every step so the sidecar doesn't need platform access.
+6. *(follow-up)* `Annotation.tsx` unchanged — it still receives the same
+   `{steps}` regardless of backend.
 
 **P5 — first-run model wizard**
 - `Models.tsx` checks for `~/Library/Application Support/` Ollama models + mlx-whisper cache.

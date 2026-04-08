@@ -58,6 +58,44 @@ pub trait MouseTracker {
     fn click(&self, x: f64, y: f64) -> AppResult<()>;
 }
 
+/// One candidate element from the focused app's Accessibility (AX) tree.
+///
+/// Coordinates are in **screen pixels** (matching `MouseTracker::click`), not
+/// normalised. The grounding pipeline matches on `role`/`title`/`description`
+/// text against the user's question and then clicks the centre of the chosen
+/// candidate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AxCandidate {
+    /// AX role (`AXButton`, `AXTextField`, `AXMenuItem`, …). Empty if unknown.
+    pub role: String,
+    /// Primary human-readable label (`AXTitle`). May be empty.
+    pub title: String,
+    /// Fallback label (`AXDescription` / `AXValue`). May be empty.
+    pub description: String,
+    /// Screen-space frame: `{x, y, width, height}` in pixels.
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl AxCandidate {
+    /// Centre point of the element in screen pixels.
+    pub fn centre(&self) -> (f64, f64) {
+        (self.x + self.width / 2.0, self.y + self.height / 2.0)
+    }
+}
+
+/// Walks the macOS Accessibility tree to enumerate clickable elements of the
+/// focused app's focused window. Returns an empty Vec on platforms where no
+/// AX API is available (Linux CI) or when the app doesn't expose one.
+pub trait AxTree {
+    /// Enumerate candidate elements in the focused window of the frontmost
+    /// application. Implementations should cap tree depth to keep latency
+    /// sub-millisecond on reasonable UIs.
+    fn focused_window_candidates(&self) -> AppResult<Vec<AxCandidate>>;
+}
+
 /// Aggregator returned by `current()`. Each method returns a fresh handle so
 /// callers don't have to think about Send/Sync of OS objects.
 pub trait Platform: Send + Sync {
@@ -65,6 +103,7 @@ pub trait Platform: Send + Sync {
     fn overlay(&self) -> Box<dyn OverlayWindow>;
     fn capture(&self) -> Box<dyn ScreenCapture>;
     fn mouse(&self) -> Box<dyn MouseTracker>;
+    fn ax(&self) -> Box<dyn AxTree>;
 }
 
 #[cfg(target_os = "macos")]

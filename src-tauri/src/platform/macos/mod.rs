@@ -1,7 +1,8 @@
 //! macOS implementation of the platform traits.
 
-use crate::platform::{MouseTracker, OverlayWindow, Permissions, Platform, ScreenCapture};
+use crate::platform::{AxTree, MouseTracker, OverlayWindow, Permissions, Platform, ScreenCapture};
 
+mod ax;
 mod capture;
 mod mouse;
 mod permissions;
@@ -21,5 +22,8 @@ impl Platform for MacOsPlatform {
     }
     fn mouse(&self) -> Box<dyn MouseTracker> {
         Box::new(mouse::MacMouse)
+    }
+    fn ax(&self) -> Box<dyn AxTree> {
+        Box::new(ax::MacAx)
     }
 }

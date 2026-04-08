@@ -75,6 +75,7 @@ pub fn run() {
             ipc::ping_sidecar,
             ipc::sidecar_call,
             ipc::capture_screen,
+            ipc::ax_locate,
             ipc::click_at_normalized,
         ])
         .setup(|app| {

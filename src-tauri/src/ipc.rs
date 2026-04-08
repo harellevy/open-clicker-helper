@@ -152,6 +152,25 @@ pub fn capture_screen() -> AppResult<Option<String>> {
     }
 }
 
+/// Walk the macOS Accessibility (AX) tree of the focused app's focused
+/// window and return a flat list of clickable candidates. Returns an empty
+/// Vec on non-macOS platforms, when AX permission is not granted, or when
+/// the frontmost app exposes no AX tree.
+///
+/// The grounding pipeline feeds this list into the VLM-optional "auto"
+/// path — candidates with a text label matching the user's question are
+/// clicked directly, bypassing the vision model for a sub-millisecond hit.
+#[tauri::command]
+pub fn ax_locate() -> AppResult<Vec<crate::platform::AxCandidate>> {
+    match platform::current().ax().focused_window_candidates() {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            tracing::warn!("ax_locate: {e}");
+            Ok(Vec::new())
+        }
+    }
+}
+
 /// Synthesise a left-click at normalised coordinates (0.0–1.0) on the primary
 /// monitor.  Converts to physical pixels, then posts CGEvent mouse-down/up.
 ///

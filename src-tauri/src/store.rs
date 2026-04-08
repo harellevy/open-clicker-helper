@@ -63,11 +63,23 @@ impl Default for Settings {
 /// Grounding-pipeline toggles — two-pass refinement, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroundingSettings {
+    /// Grounding strategy selector:
+    ///   - `"auto"`: try the macOS Accessibility (AX) tree first, fall back
+    ///     to VLM if no candidate matches.
+    ///   - `"ax"`:   AX-only (no VLM fallback).
+    ///   - `"vlm"`:  VLM-only (skip AX probing entirely).
+    #[serde(default = "grounding_default_mode")]
+    pub mode: String,
+
     /// When true (default), run a second VLM pass on a full-resolution crop
     /// around each rough target to tighten pixel accuracy. Costs roughly one
     /// extra VLM call per step; disable if latency matters more than accuracy.
     #[serde(default = "grounding_default_refine")]
     pub refine: bool,
+}
+
+fn grounding_default_mode() -> String {
+    "auto".into()
 }
 
 fn grounding_default_refine() -> bool {
@@ -77,6 +89,7 @@ fn grounding_default_refine() -> bool {
 impl Default for GroundingSettings {
     fn default() -> Self {
         Self {
+            mode: grounding_default_mode(),
             refine: grounding_default_refine(),
         }
     }
@@ -318,5 +331,28 @@ mod tests {
         let json = r#"{"grounding":{"refine":false}}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.grounding.refine);
+    }
+
+    #[test]
+    fn grounding_mode_defaults_to_auto() {
+        let s = Settings::default();
+        assert_eq!(s.grounding.mode, "auto");
+    }
+
+    #[test]
+    fn grounding_mode_roundtrips() {
+        let json = r#"{"grounding":{"mode":"ax","refine":false}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.grounding.mode, "ax");
+        assert!(!s.grounding.refine);
+    }
+
+    #[test]
+    fn grounding_mode_missing_falls_back_to_auto() {
+        // Older settings.json written before the mode field existed.
+        let json = r#"{"grounding":{"refine":true}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.grounding.mode, "auto");
+        assert!(s.grounding.refine);
     }
 }
