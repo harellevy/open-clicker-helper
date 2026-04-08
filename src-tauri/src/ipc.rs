@@ -164,8 +164,7 @@ pub async fn click_at_normalized(app: tauri::AppHandle, x: f64, y: f64) -> AppRe
     // Run the blocking CGEvent calls off the async executor.
     tokio::task::spawn_blocking(move || platform::current().mouse().click(px, py))
         .await
-        .map_err(|e| AppError::Platform(format!("spawn_blocking click: {e}")))
-        .and_then(|r| r)
+        .map_err(|e| AppError::Platform(format!("spawn_blocking click: {e}")))?
 }
 
 /// Generic JSON-RPC pass-through to the Python sidecar.
