@@ -58,7 +58,7 @@ export function defaultSettings(): Settings {
     },
     vlm: {
       provider: "ollama",
-      ollama_model: "qwen2.5-vl:7b",
+      ollama_model: "qwen2.5vl:7b",
       ollama_url: "http://localhost:11434",
       openai_model: "gpt-4o",
       openai_key: null,

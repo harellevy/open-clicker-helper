@@ -97,7 +97,7 @@ fn vlm_default_provider() -> String {
     "ollama".into()
 }
 fn vlm_default_ollama_model() -> String {
-    "qwen2.5-vl:7b".into()
+    "qwen2.5vl:7b".into()
 }
 fn vlm_default_ollama_url() -> String {
     "http://localhost:11434".into()
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(s.stt.provider, "mlx-whisper");
         assert_eq!(s.stt.mlx_model, "mlx-community/whisper-base-mlx");
         assert_eq!(s.vlm.provider, "ollama");
-        assert_eq!(s.vlm.ollama_model, "qwen2.5-vl:7b");
+        assert_eq!(s.vlm.ollama_model, "qwen2.5vl:7b");
         assert_eq!(s.vlm.ollama_url, "http://localhost:11434");
         assert_eq!(s.tts.provider, "kokoro");
         assert_eq!(s.tts.kokoro_voice, "af_heart");

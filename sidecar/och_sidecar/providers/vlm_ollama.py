@@ -11,7 +11,7 @@ from .base import ProviderConfig, ProviderError, VlmProvider
 
 
 class OllamaConfig(ProviderConfig):
-    ollama_model: str = "qwen2.5-vl:7b"
+    ollama_model: str = "qwen2.5vl:7b"
     ollama_url: str = "http://localhost:11434"
 
 
@@ -29,7 +29,7 @@ class OllamaVlm(VlmProvider):
     ) -> None:
         if config is None:
             config = OllamaConfig(
-                ollama_model=model or "qwen2.5-vl:7b",
+                ollama_model=model or "qwen2.5vl:7b",
                 ollama_url=(base_url or "http://localhost:11434").rstrip("/"),
             )
         super().__init__(config)
