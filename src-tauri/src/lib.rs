@@ -4,17 +4,19 @@
 //! - `platform/` holds OS-specific code behind traits so the Windows port
 //!   later only adds a sibling module.
 //! - `ipc` exposes `tauri::command`s consumed by the React frontend.
-//! - `sidecar` will spawn the Python AI service over stdio JSON-RPC (P1).
+//! - `sidecar` spawns the Python AI service over stdio JSON-RPC.
+//! - `store` defines the settings types persisted via tauri-plugin-store.
 
 mod error;
 mod ipc;
 mod platform;
 mod sidecar;
+mod store;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
 use crate::sidecar::Sidecar;
@@ -41,7 +43,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ipc::get_permissions,
+            ipc::open_system_settings,
+            ipc::get_settings,
+            ipc::save_settings,
             ipc::ping_sidecar,
+            ipc::sidecar_call,
         ])
         .setup(|app| {
             // Configure the transparent overlay window with native macOS flags
@@ -55,18 +61,31 @@ pub fn run() {
                         tracing::warn!("overlay configuration failed: {e}");
                     }
                 }
-                // P0: keep the overlay hidden until P4 needs it.
+                // Keep the overlay hidden until P4 needs it.
                 let _ = overlay.hide();
             }
 
-            // Spawn the Python sidecar in the background. The lock is held
-            // very briefly (one assignment) so it never blocks IPC handlers.
+            // Spawn the Python sidecar in the background, then start the
+            // progress-notification relay so sidecar events (downloads, pipeline
+            // stages) flow to the React frontend as `sidecar://progress` events.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match resolve_sidecar_dir(&handle) {
                     Ok((uv, dir)) => match Sidecar::spawn(&uv, &dir).await {
                         Ok(sc) => {
                             tracing::info!("sidecar spawned (uv={uv:?}, dir={dir:?})");
+
+                            // Start progress relay before storing the sidecar so
+                            // we never miss an early notification.
+                            let mut progress_rx = sc.progress();
+                            let relay = handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                while let Ok(p) = progress_rx.recv().await {
+                                    let _ = relay.emit("sidecar://progress", &p);
+                                }
+                                tracing::debug!("sidecar progress relay ended");
+                            });
+
                             let state = handle.state::<AppState>();
                             *state.sidecar.lock().await = Some(Arc::new(sc));
                         }
@@ -83,13 +102,7 @@ pub fn run() {
 }
 
 /// Resolve the path to the bundled `uv` binary and the `sidecar/` project dir.
-///
-/// In dev (`tauri dev`) we expect both alongside the repo. In a packaged
-/// app the bundled `uv` lives next to the executable and the sidecar lives
-/// inside the app resources. We probe the dev path first; the bundled
-/// resolution arrives in P5 (model wizard) when we ship a release build.
 fn resolve_sidecar_dir(_handle: &tauri::AppHandle) -> error::AppResult<(PathBuf, PathBuf)> {
-    // Dev path: walk up from CARGO_MANIFEST_DIR (= src-tauri/) to repo root.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
         .parent()
@@ -100,11 +113,9 @@ fn resolve_sidecar_dir(_handle: &tauri::AppHandle) -> error::AppResult<(PathBuf,
 }
 
 fn which_uv() -> error::AppResult<PathBuf> {
-    // Honour an env override first (used by the bundled binary in P5).
     if let Ok(p) = std::env::var("OCH_UV_BINARY") {
         return Ok(PathBuf::from(p));
     }
-    // Then look on PATH so dev installs work out of the box.
     for dir in std::env::var_os("PATH")
         .as_ref()
         .map(|p| std::env::split_paths(p).collect::<Vec<_>>())

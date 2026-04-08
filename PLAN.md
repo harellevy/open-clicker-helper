@@ -144,12 +144,38 @@ open-clicker-helper/
 - `sidecar.rs`: spawn `binaries/uv run och-sidecar`; own stdin/stdout; route responses via `oneshot` channels.
 - One stub handler per category returning canary values (`ping → {ok: true}`).
 
-**P2 — settings + provider abstraction**
-- `tauri-plugin-store` JSON file in app-support for provider config + hotkey preference.
-- React `Providers.tsx`: tabs for STT / TTS / Vision LLM; input fields for API keys.
-- "Test" button per provider → `providers.test` RPC call → inline result badge.
-- `Permissions.tsx`: status badges + "Open System Settings" deep-link buttons.
-- `Hotkeys.tsx`: rebind global shortcut via `tauri-plugin-global-shortcut`.
+**P2 — first-run environment setup + settings UI** ✅
+
+The first thing a new user encounters after install is a 5-step wizard that
+checks and downloads every offline model dependency. This runs once (gated by
+`setup_complete` in the store); afterwards the settings window shows a tabbed
+UI for re-configuring everything.
+
+*Wizard steps (shown on first launch):*
+1. **Permissions** — Screen Recording, Accessibility, Microphone badges with
+   "Fix →" deep-links into System Settings privacy panes.
+2. **STT** — Detect mlx-whisper install + model-weights cache; "Download
+   weights" streams progress via `setup.download_stt`. OpenAI Whisper as cloud
+   fallback.
+3. **Vision LLM** — Ping Ollama; check + pull chosen model; `setup.download_vlm`
+   streams NDJSON progress from `ollama pull`. OpenAI GPT-4o and Anthropic
+   Claude as cloud fallbacks.
+4. **TTS** — Detect kokoro-onnx + voice model; "Download Kokoro" runs
+   `setup.download_tts`. OpenAI TTS as cloud fallback.
+5. **Hotkey** — Live key-recorder; writes accelerator string to the store.
+
+*Settings pages (post-wizard):*
+- `Providers.tsx` — provider toggles + API-key fields + "Test connection" button
+  (`providers.test` RPC).
+- `Permissions.tsx` — permission badges + "Fix →" + Refresh.
+- `Hotkeys.tsx` — rebind activation shortcut at any time.
+
+*Rust:* `store.rs` (`Settings` structs); new IPC commands: `get_settings`,
+`save_settings`, `open_system_settings`, `sidecar_call`; progress relay in
+`lib.rs` emits `sidecar://progress` Tauri events.
+
+*Sidecar:* `setup.py` with check/download helpers (generators for streaming);
+`handlers.py` registers all `setup.*` and `providers.test` methods.
 
 **P3 — voice round-trip (no vision yet)**
 - `audio.rs` records mic to in-memory WAV via `cpal`; `record_audio` Tauri command.
