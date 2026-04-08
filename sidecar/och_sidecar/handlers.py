@@ -105,14 +105,24 @@ def _providers_test(params: dict[str, Any]) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Pipeline (wired in P3 / P4)
+# Pipeline — full voice round-trip (P3)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _pipeline_run(_params: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error": "pipeline.run is wired in P3 (voice) and P4 (vision)",
-    }
+def _pipeline_run(params: dict[str, Any]):
+    """Streaming handler: yields (event, payload) progress tuples.
+
+    params:
+        audio_b64  – base-64-encoded WAV audio (required)
+        image_b64  – base-64-encoded PNG screenshot, optional
+        settings   – provider settings dict, optional
+    """
+    from . import pipeline as _pipeline
+
+    return _pipeline.run(
+        params["audio_b64"],
+        params.get("image_b64"),
+        params.get("settings", {}),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

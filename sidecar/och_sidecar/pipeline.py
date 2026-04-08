@@ -1,0 +1,106 @@
+"""Voice round-trip pipeline: audio bytes in → STT → LLM → TTS → audio bytes out.
+
+The public entry point is `run()`, a generator that yields ``(event, payload)``
+progress tuples compatible with the RPC streaming layer in `rpc.py`.
+
+Event sequence
+--------------
+  ("stt_start", {})
+  ("stt_done",  {"transcript": str})
+  ("llm_start", {})
+  ("llm_done",  {"answer": str})
+  ("tts_start", {})
+  ("tts_done",  {})
+  ("result",    {"transcript": str, "answer": str, "audio_b64": str})
+
+The RPC layer stops iterating once it sees an event named ``"result"`` and
+sends that payload as the JSON-RPC result.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+from collections.abc import Iterator
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def run(
+    audio_b64: str,
+    image_b64: str | None,
+    settings: dict[str, Any],
+) -> Iterator[tuple[str, Any]]:
+    """Generator pipeline for a single voice round-trip.
+
+    Args:
+        audio_b64:  Base-64-encoded WAV audio from the user.
+        image_b64:  Optional base-64-encoded PNG screenshot for vision context.
+        settings:   Provider settings dict (see ``_make_*`` helpers below).
+
+    Yields:
+        ``(event_name, payload)`` tuples consumed by the RPC streaming layer.
+        The final yield is ``("result", {...})``.
+    """
+    audio_bytes = base64.b64decode(audio_b64)
+    image_bytes = base64.b64decode(image_b64) if image_b64 else None
+
+    # ── STT ──────────────────────────────────────────────────────────────────
+    yield ("stt_start", {})
+    stt = _make_stt(settings)
+    transcript = stt.transcribe(audio_bytes)
+    yield ("stt_done", {"transcript": transcript})
+    logger.info("STT: %r", transcript)
+
+    # ── LLM ──────────────────────────────────────────────────────────────────
+    yield ("llm_start", {})
+    vlm = _make_vlm(settings)
+    answer = vlm.complete(transcript, image_bytes)
+    yield ("llm_done", {"answer": answer})
+    logger.info("LLM answer: %r", answer)
+
+    # ── TTS ──────────────────────────────────────────────────────────────────
+    yield ("tts_start", {})
+    tts = _make_tts(settings)
+    audio_response = tts.synthesize(answer)
+    audio_response_b64 = base64.b64encode(audio_response).decode()
+    yield ("tts_done", {})
+
+    # ── Final result (consumed by rpc.py as the JSON-RPC result payload) ─────
+    yield (
+        "result",
+        {
+            "transcript": transcript,
+            "answer": answer,
+            "audio_b64": audio_response_b64,
+        },
+    )
+
+
+# ── Provider factories ────────────────────────────────────────────────────────
+
+def _make_stt(settings: dict[str, Any]):
+    from .providers.stt_mlx_whisper import MlxWhisperConfig, MlxWhisperStt
+
+    stt_cfg = settings.get("stt", {})
+    model = stt_cfg.get("mlx_model", "mlx-community/whisper-base-mlx")
+    return MlxWhisperStt(MlxWhisperConfig(mlx_model=model))
+
+
+def _make_vlm(settings: dict[str, Any]):
+    from .providers.vlm_ollama import OllamaConfig, OllamaVlm
+
+    vlm_cfg = settings.get("vlm", {})
+    model = vlm_cfg.get("ollama_model", "qwen2.5-vl:7b")
+    url = vlm_cfg.get("ollama_url", "http://localhost:11434")
+    return OllamaVlm(OllamaConfig(ollama_model=model, ollama_url=url))
+
+
+def _make_tts(settings: dict[str, Any]):
+    from .providers.tts_kokoro import KokoroConfig, KokoroTts
+
+    tts_cfg = settings.get("tts", {})
+    voice = tts_cfg.get("kokoro_voice", "af_heart")
+    speed = float(tts_cfg.get("kokoro_speed", 1.0))
+    return KokoroTts(KokoroConfig(kokoro_voice=voice, kokoro_speed=speed))

@@ -24,6 +24,10 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# P3: audio capture and encoding
+cpal = "0.15"
+hound = "3"
+base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"

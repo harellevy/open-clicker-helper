@@ -803,7 +803,11 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "kokoro-onnx" },
+    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "numpy" },
     { name = "pydantic" },
+    { name = "soundfile" },
 ]
 
 [package.optional-dependencies]
@@ -828,9 +832,13 @@ dev = [
 requires-dist = [
     { name = "faster-whisper", marker = "extra == 'faster-whisper'", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "kokoro-onnx", specifier = ">=0.4.0" },
     { name = "kokoro-onnx", marker = "extra == 'kokoro'", specifier = ">=0.4" },
+    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.3.0" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = ">=0.4" },
+    { name = "numpy", specifier = ">=1.24" },
     { name = "pydantic", specifier = ">=2.9" },
+    { name = "soundfile", specifier = ">=0.12.1" },
     { name = "soundfile", marker = "extra == 'kokoro'", specifier = ">=0.12" },
 ]
 provides-extras = ["mlx", "faster-whisper", "kokoro"]

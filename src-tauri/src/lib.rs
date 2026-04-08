@@ -6,7 +6,9 @@
 //! - `ipc` exposes `tauri::command`s consumed by the React frontend.
 //! - `sidecar` spawns the Python AI service over stdio JSON-RPC.
 //! - `store` defines the settings types persisted via tauri-plugin-store.
+//! - `audio` records mic audio via cpal (P3).
 
+mod audio;
 mod error;
 mod ipc;
 mod platform;
@@ -16,15 +18,36 @@ mod store;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use base64::Engine;
+use serde::Serialize;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
 use crate::sidecar::Sidecar;
 
+// ──────────────────────────────────────────────────────────────────────────────
+
 /// Shared application state held by Tauri's manager.
 pub struct AppState {
     pub sidecar: tokio::sync::Mutex<Option<Arc<Sidecar>>>,
+    /// Active recording session (None when idle).
+    pub recorder: tokio::sync::Mutex<Option<audio::AudioRecorder>>,
 }
+
+/// Frontend-visible state of the push-to-talk activation.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum HotkeyState {
+    Idle,
+    Recording,
+    Processing,
+    #[serde(rename_all = "camelCase")]
+    Error {
+        message: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 pub fn run() {
     tracing_subscriber::fmt()
@@ -40,6 +63,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState {
             sidecar: tokio::sync::Mutex::new(None),
+            recorder: tokio::sync::Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             ipc::get_permissions,
@@ -50,9 +74,7 @@ pub fn run() {
             ipc::sidecar_call,
         ])
         .setup(|app| {
-            // Configure the transparent overlay window with native macOS flags
-            // (joinAllSpaces, fullScreenAuxiliary, screen-saver level, ignore
-            // mouse events). Tauri's window options alone are not sufficient.
+            // Configure the transparent overlay window with native macOS flags.
             if let Some(overlay) = app.get_webview_window("overlay") {
                 #[cfg(target_os = "macos")]
                 {
@@ -61,13 +83,11 @@ pub fn run() {
                         tracing::warn!("overlay configuration failed: {e}");
                     }
                 }
-                // Keep the overlay hidden until P4 needs it.
-                let _ = overlay.hide();
+                // Show overlay now (P3 uses it for the HUD bubble).
+                let _ = overlay.show();
             }
 
-            // Spawn the Python sidecar in the background, then start the
-            // progress-notification relay so sidecar events (downloads, pipeline
-            // stages) flow to the React frontend as `sidecar://progress` events.
+            // Spawn the Python sidecar + start the progress relay.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match resolve_sidecar_dir(&handle) {
@@ -75,8 +95,6 @@ pub fn run() {
                         Ok(sc) => {
                             tracing::info!("sidecar spawned (uv={uv:?}, dir={dir:?})");
 
-                            // Start progress relay before storing the sidecar so
-                            // we never miss an early notification.
                             let mut progress_rx = sc.progress();
                             let relay = handle.clone();
                             tauri::async_runtime::spawn(async move {
@@ -95,13 +113,173 @@ pub fn run() {
                 }
             });
 
+            // Register the global push-to-talk hotkey from settings.
+            register_hotkey(app);
+
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-/// Resolve the path to the bundled `uv` binary and the `sidecar/` project dir.
+// ──────────────────────────────────────────────────────────────────────────────
+// Global hotkey (push-to-talk)
+
+fn register_hotkey(app: &mut tauri::App) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    use tauri_plugin_store::StoreExt;
+
+    // Read the configured hotkey accelerator from the store.
+    let accelerator: String = app
+        .store(store::STORE_FILE)
+        .ok()
+        .and_then(|s| s.get(store::SETTINGS_KEY))
+        .and_then(|v| serde_json::from_value::<store::Settings>(v).ok())
+        .map(|s| s.hotkey)
+        .unwrap_or_else(|| "CommandOrControl+Shift+Space".into());
+
+    let result = app.handle().global_shortcut().on_shortcut(
+        accelerator.as_str(),
+        |app, _shortcut, event| {
+            use tauri_plugin_global_shortcut::ShortcutState;
+            let handle = app.clone();
+            match event.state {
+                ShortcutState::Pressed => {
+                    tauri::async_runtime::spawn(async move {
+                        on_press(&handle).await;
+                    });
+                }
+                ShortcutState::Released => {
+                    tauri::async_runtime::spawn(async move {
+                        on_release(&handle).await;
+                    });
+                }
+            }
+        },
+    );
+
+    match result {
+        Ok(()) => tracing::info!("hotkey registered: {accelerator}"),
+        Err(e) => tracing::warn!("hotkey registration failed: {e}"),
+    }
+}
+
+async fn on_press(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let mut rec = state.recorder.lock().await;
+    if rec.is_some() {
+        return; // already recording
+    }
+    match audio::AudioRecorder::start() {
+        Ok(recorder) => {
+            *rec = Some(recorder);
+            let _ = app.emit("hotkey-state", HotkeyState::Recording);
+            tracing::debug!("recording started");
+        }
+        Err(e) => {
+            tracing::error!("start recording: {e}");
+            let _ = app.emit(
+                "hotkey-state",
+                HotkeyState::Error {
+                    message: e.to_string(),
+                },
+            );
+        }
+    }
+}
+
+async fn on_release(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let recorder = state.recorder.lock().await.take();
+    let Some(recorder) = recorder else { return };
+
+    let _ = app.emit("hotkey-state", HotkeyState::Processing);
+
+    // Encode WAV in a blocking task (stop_and_encode calls mpsc::recv).
+    let wav_bytes = match tokio::task::spawn_blocking(move || recorder.stop_and_encode()).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            tracing::error!("encode audio: {e}");
+            let _ = app.emit(
+                "hotkey-state",
+                HotkeyState::Error {
+                    message: e.to_string(),
+                },
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::error!("spawn_blocking: {e}");
+            let _ = app.emit(
+                "hotkey-state",
+                HotkeyState::Error {
+                    message: e.to_string(),
+                },
+            );
+            return;
+        }
+    };
+
+    tracing::info!("recorded {} bytes of audio", wav_bytes.len());
+
+    // Load settings to pass to the pipeline.
+    let settings_val = load_settings_json(app);
+
+    let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+
+    // Call the sidecar pipeline.
+    let sidecar = state.sidecar.lock().await.clone();
+    let Some(sidecar) = sidecar else {
+        tracing::warn!("sidecar not ready");
+        let _ = app.emit(
+            "hotkey-state",
+            HotkeyState::Error {
+                message: "sidecar not ready".into(),
+            },
+        );
+        return;
+    };
+
+    match sidecar
+        .call(
+            "pipeline.run",
+            serde_json::json!({
+                "audio_b64": audio_b64,
+                "image_b64": null,
+                "settings": settings_val,
+            }),
+        )
+        .await
+    {
+        Ok(result) => {
+            let _ = app.emit("pipeline-result", result);
+            tracing::debug!("pipeline completed");
+        }
+        Err(e) => {
+            tracing::error!("pipeline: {e}");
+            let _ = app.emit(
+                "hotkey-state",
+                HotkeyState::Error {
+                    message: e.to_string(),
+                },
+            );
+        }
+    }
+
+    let _ = app.emit("hotkey-state", HotkeyState::Idle);
+}
+
+fn load_settings_json(app: &tauri::AppHandle) -> serde_json::Value {
+    use tauri_plugin_store::StoreExt;
+    app.store(store::STORE_FILE)
+        .ok()
+        .and_then(|s| s.get(store::SETTINGS_KEY))
+        .unwrap_or(serde_json::Value::Null)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Sidecar resolution
+
 fn resolve_sidecar_dir(_handle: &tauri::AppHandle) -> error::AppResult<(PathBuf, PathBuf)> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir

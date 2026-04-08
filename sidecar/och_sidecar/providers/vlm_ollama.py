@@ -1,0 +1,89 @@
+"""VLM provider: Ollama (local inference server)."""
+
+from __future__ import annotations
+
+import base64
+from typing import Any
+
+import httpx
+
+from .base import ProviderConfig, ProviderError, VlmProvider
+
+
+class OllamaConfig(ProviderConfig):
+    ollama_model: str = "qwen2.5-vl:7b"
+    ollama_url: str = "http://localhost:11434"
+
+
+class OllamaVlm(VlmProvider):
+    kind = "vlm"
+    id = "ollama"
+    config_schema = OllamaConfig
+
+    def __init__(
+        self,
+        config: OllamaConfig | None = None,
+        *,
+        model: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        if config is None:
+            config = OllamaConfig(
+                ollama_model=model or "qwen2.5-vl:7b",
+                ollama_url=(base_url or "http://localhost:11434").rstrip("/"),
+            )
+        super().__init__(config)
+
+    @property
+    def _model(self) -> str:
+        return self.config.ollama_model  # type: ignore[attr-defined]
+
+    @property
+    def _base_url(self) -> str:
+        return self.config.ollama_url.rstrip("/")  # type: ignore[attr-defined]
+
+    def test(self) -> dict[str, Any]:
+        try:
+            httpx.get(f"{self._base_url}/api/tags", timeout=3).raise_for_status()
+            return {"ok": True}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+
+    def complete(self, prompt: str, image_bytes: bytes | None = None) -> str:
+        if image_bytes is not None:
+            img_b64 = base64.b64encode(image_bytes).decode()
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+        else:
+            messages = [{"role": "user", "content": prompt}]
+
+        try:
+            resp = httpx.post(
+                f"{self._base_url}/api/chat",
+                json={"model": self._model, "messages": messages, "stream": False},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"Ollama returned HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError(f"Ollama request failed: {exc}") from exc
+
+        return resp.json()["message"]["content"].strip()
+
+    def locate(self, image_png: bytes, question: str) -> dict[str, Any]:
+        """Use the VLM to answer a visual location question."""
+        answer = self.complete(question, image_bytes=image_png)
+        return {"explanation": answer}
