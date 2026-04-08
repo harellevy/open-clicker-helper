@@ -246,6 +246,34 @@ export function onPipelineResult(cb: (r: PipelineResult) => void): Promise<() =>
   return listen<PipelineResult>("pipeline-result", (ev) => cb(ev.payload));
 }
 
+/**
+ * Synthesise a left-click at normalised (0–1) screen coordinates.
+ * Converts to physical pixels on the Rust side via the primary monitor size.
+ */
+export function clickAtNormalized(x: number, y: number): Promise<void> {
+  return invoke<void>("click_at_normalized", { x, y });
+}
+
+/**
+ * Re-ground a question against a new screenshot without STT/TTS.
+ * Used by the iterative multi-step loop after each click.
+ */
+export function groundingLocate(
+  imageb64: string,
+  question: string,
+  settings?: object,
+): Promise<{ steps: GroundingStep[] }> {
+  return invoke("sidecar_call", {
+    method: "grounding.locate",
+    params: { image_b64: imageb64, question, settings: settings ?? {} },
+  });
+}
+
+/** Capture the primary display and return base64 PNG (null if permission denied). */
+export function captureScreen(): Promise<string | null> {
+  return invoke<string | null>("capture_screen");
+}
+
 /** Play a base64-encoded WAV file using the Web Audio API. */
 export async function playAudioB64(b64: string): Promise<void> {
   const binary = atob(b64);

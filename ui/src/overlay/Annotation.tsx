@@ -1,17 +1,27 @@
 /**
- * Annotation — SVG cursor-path animation for visual grounding results.
+ * Annotation — iterative SVG cursor animation with click synthesis (P4.1).
  *
- * Renders a full-screen SVG overlay (pointer-events: none) that animates
- * a cursor from the current mouse position to each grounding step in
- * sequence, following a bezier path with spring-physics easing.
+ * For each grounding step:
+ *   1. Animate cursor along a bezier path to the target.
+ *   2. Synthesise a real left-click via `click_at_normalized` IPC.
+ *   3. Wait `stepDelayMs` for the UI to settle.
+ *   4. Capture a fresh screenshot and re-ground the *next* step against it.
+ *   5. Repeat until no more steps or `maxSteps` reached.
  *
  * Coordinate convention
  * ─────────────────────
- * Grounding steps arrive with normalised coords (0–1).  We multiply by
- * window.innerWidth / window.innerHeight to get CSS px.
+ * Steps arrive with normalised coords (0–1). CSS positions are derived by
+ * multiplying by window.innerWidth / innerHeight. The Rust click_at_normalized
+ * command independently converts to physical pixels using the primary monitor.
  */
 
 import { useEffect, useRef, useState } from "react";
+import {
+  captureScreen,
+  clickAtNormalized,
+  groundingLocate,
+  GroundingStep,
+} from "../lib/api";
 import {
   AnimationHandle,
   Point,
@@ -21,87 +31,137 @@ import {
   lerp,
 } from "./animator";
 
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const ANIMATION_MS = 900;   // cursor travel time per step
+const STEP_DELAY_MS = 800;  // wait after click for UI to settle
+const MAX_STEPS = 8;        // safety cap against infinite loops
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface GroundingStep {
-  x: number; // normalised 0–1
-  y: number;
-  explanation: string;
-}
-
-interface AnnotationProps {
+export interface AnnotationProps {
   steps: GroundingStep[];
-  /** Called when all step animations have finished. */
+  /** The original transcribed question — used when re-grounding. */
+  transcript: string;
+  /** Called when all steps finish (or we give up). */
   onDone?: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function Annotation({ steps, onDone }: AnnotationProps) {
-  const [cursorPos, setCursorPos] = useState<Point>({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-  const [pathD, setPathD] = useState<string>("");
-  const [pathProgress, setPathProgress] = useState(0); // 0–1 for stroke-dashoffset
+export function Annotation({ steps, transcript, onDone }: AnnotationProps) {
+  const [cursorPos, setCursorPos] = useState<Point>({
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2,
+  });
+  const [pathD, setPathD] = useState("");
+  const [pathProgress, setPathProgress] = useState(0);
   const [targetDot, setTargetDot] = useState<Point | null>(null);
-  const [label, setLabel] = useState<string>("");
-  const animRef = useRef<AnimationHandle | null>(null);
-  const stepsRef = useRef<GroundingStep[]>(steps);
-  const cursorRef = useRef<Point>(cursorPos);
+  const [label, setLabel] = useState("");
+  const [status, setStatus] = useState(""); // "Clicking…" | "Re-grounding…" | ""
 
-  // Keep cursorRef in sync for use inside animation callbacks
+  const animRef = useRef<AnimationHandle | null>(null);
+  const cursorRef = useRef<Point>(cursorPos);
+  const cancelledRef = useRef(false);
+
   useEffect(() => {
     cursorRef.current = cursorPos;
   }, [cursorPos]);
 
   useEffect(() => {
-    stepsRef.current = steps;
+    cancelledRef.current = false;
     if (steps.length === 0) return;
-    animRef.current?.cancel();
-    runSteps(steps, 0);
-    return () => { animRef.current?.cancel(); };
+    runIterative(steps);
+    return () => {
+      cancelledRef.current = true;
+      animRef.current?.cancel();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [steps]);
 
-  function runSteps(stepList: GroundingStep[], index: number) {
-    if (index >= stepList.length) {
-      // All done — linger 1 s then notify parent
-      setTimeout(() => {
-        setPathD("");
-        setTargetDot(null);
-        setLabel("");
-        onDone?.();
-      }, 1000);
-      return;
+  async function runIterative(initialSteps: GroundingStep[]) {
+    let remaining = [...initialSteps];
+    let totalClicks = 0;
+
+    while (remaining.length > 0 && totalClicks < MAX_STEPS) {
+      if (cancelledRef.current) return;
+
+      const step = remaining[0];
+
+      // ── 1. Animate cursor to target ─────────────────────────────────────
+      await animateToStep(step);
+      if (cancelledRef.current) return;
+
+      // ── 2. Click ─────────────────────────────────────────────────────────
+      setStatus("Clicking…");
+      try {
+        await clickAtNormalized(step.x, step.y);
+      } catch (e) {
+        console.warn("click failed:", e);
+      }
+      totalClicks++;
+
+      // ── 3. Wait for UI to settle ─────────────────────────────────────────
+      await sleep(STEP_DELAY_MS);
+      if (cancelledRef.current) return;
+
+      // ── 4. Re-ground remaining steps against fresh screenshot ────────────
+      remaining = remaining.slice(1); // pop the step we just executed
+
+      if (remaining.length === 0) break; // nothing more to do
+
+      setStatus("Re-grounding…");
+      try {
+        const png = await captureScreen();
+        if (png) {
+          const result = await groundingLocate(png, transcript);
+          if (result.steps.length > 0) {
+            remaining = result.steps;
+          }
+          // If re-grounding returns no steps, we stop (task complete).
+        }
+      } catch (e) {
+        console.warn("re-grounding failed, continuing with existing steps:", e);
+      }
+      setStatus("");
     }
 
-    const step = stepList[index];
-    const from = { ...cursorRef.current };
-    const to: Point = {
-      x: step.x * window.innerWidth,
-      y: step.y * window.innerHeight,
-    };
+    // All done — linger briefly then notify parent.
+    await sleep(600);
+    if (!cancelledRef.current) {
+      setPathD("");
+      setTargetDot(null);
+      setLabel("");
+      setStatus("");
+      onDone?.();
+    }
+  }
 
-    const path = bezierPath(from, to);
-    setPathD(path);
-    setPathProgress(0);
-    setTargetDot(to);
-    setLabel(step.explanation);
+  function animateToStep(step: GroundingStep): Promise<void> {
+    return new Promise((resolve) => {
+      const from = { ...cursorRef.current };
+      const to: Point = {
+        x: step.x * window.innerWidth,
+        y: step.y * window.innerHeight,
+      };
 
-    const DURATION_MS = 900;
+      setPathD(bezierPath(from, to));
+      setPathProgress(0);
+      setTargetDot(to);
+      setLabel(step.explanation);
 
-    animRef.current = animate(
-      DURATION_MS,
-      (t) => {
-        const eased = easeInOut(t);
-        const pos: Point = { x: lerp(from.x, to.x, eased), y: lerp(from.y, to.y, eased) };
-        setCursorPos(pos);
-        cursorRef.current = pos;
-        setPathProgress(eased);
-      },
-      () => {
-        // Pause 300 ms between steps then continue
-        setTimeout(() => runSteps(stepList, index + 1), 300);
-      },
-    );
+      animRef.current = animate(
+        ANIMATION_MS,
+        (t) => {
+          const eased = easeInOut(t);
+          const pos: Point = { x: lerp(from.x, to.x, eased), y: lerp(from.y, to.y, eased) };
+          setCursorPos(pos);
+          cursorRef.current = pos;
+          setPathProgress(eased);
+        },
+        () => resolve(),
+      );
+    });
   }
 
   if (steps.length === 0) return null;
@@ -132,7 +192,6 @@ export function Annotation({ steps, onDone }: AnnotationProps) {
           strokeLinecap="round"
           strokeDasharray={2000}
           strokeDashoffset={(1 - pathProgress) * 2000}
-          style={{ transition: "none" }}
         />
       )}
 
@@ -146,14 +205,8 @@ export function Annotation({ steps, onDone }: AnnotationProps) {
             fill="none"
             stroke="rgba(100, 200, 255, 0.5)"
             strokeWidth={2}
-            style={{ animation: "pulse-ring 1s ease-in-out infinite" }}
           />
-          <circle
-            cx={targetDot.x}
-            cy={targetDot.y}
-            r={8}
-            fill="rgba(100, 180, 255, 0.85)"
-          />
+          <circle cx={targetDot.x} cy={targetDot.y} r={8} fill="rgba(100, 180, 255, 0.85)" />
         </g>
       )}
 
@@ -183,6 +236,28 @@ export function Annotation({ steps, onDone }: AnnotationProps) {
           {label}
         </text>
       )}
+
+      {/* Status badge (Clicking… / Re-grounding…) */}
+      {status && (
+        <g transform={`translate(${svgW / 2}, ${svgH - 80})`}>
+          <rect x={-70} y={-18} width={140} height={28} rx={8} fill="rgba(20,20,28,0.85)" />
+          <text
+            textAnchor="middle"
+            dy={4}
+            fill="rgba(180,210,255,0.95)"
+            fontSize={12}
+            fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
+          >
+            {status}
+          </text>
+        </g>
+      )}
     </svg>
   );
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

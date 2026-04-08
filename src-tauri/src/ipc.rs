@@ -136,6 +136,38 @@ pub fn capture_screen() -> AppResult<Option<String>> {
     }
 }
 
+/// Synthesise a left-click at normalised coordinates (0.0–1.0) on the primary
+/// monitor.  Converts to physical pixels, then posts CGEvent mouse-down/up.
+///
+/// The overlay must be click-through for the synthesised events to reach the
+/// target application — this is guaranteed by `make_click_through_topmost`.
+#[tauri::command]
+pub async fn click_at_normalized(app: tauri::AppHandle, x: f64, y: f64) -> AppResult<()> {
+    // Get primary monitor size for coordinate conversion.
+    // We use a temporary webview window handle to access monitor info.
+    let (px, py) = if let Some(window) = app.get_webview_window("overlay") {
+        if let Ok(Some(monitor)) = window.primary_monitor() {
+            let size = monitor.size();
+            (
+                (x.clamp(0.0, 1.0) * size.width as f64).round(),
+                (y.clamp(0.0, 1.0) * size.height as f64).round(),
+            )
+        } else {
+            (x * 1440.0, y * 900.0) // fallback
+        }
+    } else {
+        (x * 1440.0, y * 900.0) // fallback
+    };
+
+    tracing::info!("click_at_normalized ({x:.3}, {y:.3}) → pixels ({px}, {py})");
+
+    // Run the blocking CGEvent calls off the async executor.
+    tokio::task::spawn_blocking(move || platform::current().mouse().click(px, py))
+        .await
+        .map_err(|e| AppError::Platform(format!("spawn_blocking click: {e}")))
+        .and_then(|r| r)
+}
+
 /// Generic JSON-RPC pass-through to the Python sidecar.
 ///
 /// Progress notifications emitted by long-running handlers (e.g.
