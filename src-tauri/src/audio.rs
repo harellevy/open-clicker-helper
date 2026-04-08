@@ -175,3 +175,51 @@ fn encode_wav_f32(samples: &[f32], channels: u16, sample_rate: u32) -> AppResult
     }
     Ok(buf.into_inner())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_empty_samples_produces_valid_wav_header() {
+        let wav = encode_wav_f32(&[], 1, 16000).unwrap();
+        assert!(wav.len() >= 44, "WAV must have at least a 44-byte header");
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+    }
+
+    #[test]
+    fn encode_samples_data_length_matches() {
+        let samples = vec![0.0f32; 16000]; // 1 second mono at 16 kHz
+        let wav = encode_wav_f32(&samples, 1, 16000).unwrap();
+        // Each f32 sample is 4 bytes; total must exceed header + data
+        assert!(wav.len() > 44 + 16000 * 4 - 8); // allow for fmt chunk variation
+        assert_eq!(&wav[0..4], b"RIFF");
+    }
+
+    #[test]
+    fn encode_stereo_wav_has_riff_magic() {
+        let samples = vec![0.5f32; 64];
+        let wav = encode_wav_f32(&samples, 2, 44100).unwrap();
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+    }
+
+    #[test]
+    fn encode_wav_is_decodable_by_hound() {
+        let original: Vec<f32> = (0..100).map(|i| i as f32 / 100.0).collect();
+        let wav = encode_wav_f32(&original, 1, 22050).unwrap();
+
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(wav)).unwrap();
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, 22050);
+        assert_eq!(spec.bits_per_sample, 32);
+
+        let decoded: Vec<f32> = reader.samples::<f32>().map(|s| s.unwrap()).collect();
+        assert_eq!(decoded.len(), original.len());
+        for (a, b) in original.iter().zip(decoded.iter()) {
+            assert!((a - b).abs() < 1e-6, "sample mismatch: {a} vs {b}");
+        }
+    }
+}

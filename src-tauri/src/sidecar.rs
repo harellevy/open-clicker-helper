@@ -218,3 +218,80 @@ impl Sidecar {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn route_response_resolves_pending_sender() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (progress_tx, _rx) = broadcast::channel::<Progress>(8);
+        let (tx, rx) = oneshot::channel();
+        pending.lock().await.insert(42, tx);
+
+        let msg = r#"{"jsonrpc":"2.0","id":42,"result":{"ok":true}}"#;
+        Sidecar::route_message(&pending, &progress_tx, msg)
+            .await
+            .unwrap();
+
+        let result = rx.await.unwrap().unwrap();
+        assert_eq!(result["ok"], true);
+        assert!(pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn route_rpc_error_sends_err_to_sender() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (progress_tx, _rx) = broadcast::channel::<Progress>(8);
+        let (tx, rx) = oneshot::channel();
+        pending.lock().await.insert(7, tx);
+
+        let msg =
+            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found"}}"#;
+        Sidecar::route_message(&pending, &progress_tx, msg)
+            .await
+            .unwrap();
+
+        let err = rx.await.unwrap().unwrap_err();
+        assert_eq!(err.code, -32601);
+        assert_eq!(err.message, "Method not found");
+    }
+
+    #[tokio::test]
+    async fn route_notification_broadcasts_to_progress() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (progress_tx, mut rx) = broadcast::channel::<Progress>(8);
+
+        let msg = r#"{"jsonrpc":"2.0","method":"pipeline.progress","params":{"id":1,"event":"stt_done","payload":{"transcript":"hello"}}}"#;
+        Sidecar::route_message(&pending, &progress_tx, msg)
+            .await
+            .unwrap();
+
+        let progress = rx.recv().await.unwrap();
+        assert_eq!(progress.id, 1);
+        assert_eq!(progress.event, "stt_done");
+        assert_eq!(progress.payload["transcript"], "hello");
+    }
+
+    #[tokio::test]
+    async fn route_unknown_id_response_is_silently_dropped() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (progress_tx, _rx) = broadcast::channel::<Progress>(8);
+
+        // id 99 has no registered sender — should not panic or error
+        let msg = r#"{"jsonrpc":"2.0","id":99,"result":{"ok":true}}"#;
+        Sidecar::route_message(&pending, &progress_tx, msg)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn route_malformed_json_returns_error() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (progress_tx, _rx) = broadcast::channel::<Progress>(8);
+
+        let result = Sidecar::route_message(&pending, &progress_tx, "not json at all").await;
+        assert!(result.is_err());
+    }
+}
