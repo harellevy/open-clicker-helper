@@ -1,0 +1,37 @@
+[package]
+name = "open-clicker-helper"
+version = "0.0.1"
+edition = "2021"
+description = "Open-source offline-first AI clicker buddy"
+license = "MIT"
+publish = false
+
+[lib]
+name = "open_clicker_helper_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.1" }
+tauri-plugin-store = "2.1"
+tauri-plugin-global-shortcut = "2.1"
+tauri-plugin-shell = "2.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSWindow", "NSResponder", "NSApplication"] }
+objc2-foundation = "0.2"
+core-foundation = "0.10"
+core-graphics = "0.24"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

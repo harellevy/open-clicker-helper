@@ -1,0 +1,38 @@
+# Node
+node_modules/
+*.log
+.npm
+.pnpm-store/
+
+# Vite / build
+dist/
+ui/dist/
+.cache/
+*.tsbuildinfo
+
+# Rust / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/uv*
+!src-tauri/binaries/.gitkeep
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# App data
+models/
+*.wav
+*.mp3
+*.tmp
