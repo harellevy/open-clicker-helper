@@ -45,7 +45,9 @@ pub fn open_system_settings(app: tauri::AppHandle, pane: String) -> AppResult<()
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
         }
         other => {
-            return Err(AppError::Platform(format!("unknown settings pane: {other}")));
+            return Err(AppError::Platform(format!(
+                "unknown settings pane: {other}"
+            )));
         }
     };
     app.shell()
@@ -61,7 +63,9 @@ pub fn open_system_settings(app: tauri::AppHandle, pane: String) -> AppResult<()
 #[tauri::command]
 pub fn get_settings(app: tauri::AppHandle) -> AppResult<Settings> {
     use tauri_plugin_store::StoreExt;
-    let store = app.store(STORE_FILE);
+    let store = app
+        .store(STORE_FILE)
+        .map_err(|e| AppError::Sidecar(format!("store open: {e}")))?;
     match store.get(SETTINGS_KEY) {
         Some(v) => serde_json::from_value(v).map_err(AppError::from),
         None => Ok(Settings::default()),
@@ -71,8 +75,13 @@ pub fn get_settings(app: tauri::AppHandle) -> AppResult<Settings> {
 #[tauri::command]
 pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> AppResult<()> {
     use tauri_plugin_store::StoreExt;
-    let store = app.store(STORE_FILE);
-    store.set(SETTINGS_KEY, serde_json::to_value(&settings).map_err(AppError::from)?);
+    let store = app
+        .store(STORE_FILE)
+        .map_err(|e| AppError::Sidecar(format!("store open: {e}")))?;
+    store.set(
+        SETTINGS_KEY,
+        serde_json::to_value(&settings).map_err(AppError::from)?,
+    );
     store
         .save()
         .map_err(|e| AppError::Sidecar(format!("store save: {e}")))?;

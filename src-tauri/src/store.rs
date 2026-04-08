@@ -57,8 +57,12 @@ pub struct SttSettings {
     pub openai_key: Option<String>,
 }
 
-fn stt_default_provider() -> String { "mlx-whisper".into() }
-fn stt_default_mlx_model() -> String { "mlx-community/whisper-base-mlx".into() }
+fn stt_default_provider() -> String {
+    "mlx-whisper".into()
+}
+fn stt_default_mlx_model() -> String {
+    "mlx-community/whisper-base-mlx".into()
+}
 
 impl Default for SttSettings {
     fn default() -> Self {
@@ -89,10 +93,18 @@ pub struct VlmSettings {
     pub anthropic_key: Option<String>,
 }
 
-fn vlm_default_provider() -> String { "ollama".into() }
-fn vlm_default_ollama_model() -> String { "qwen2.5-vl:7b".into() }
-fn vlm_default_ollama_url() -> String { "http://localhost:11434".into() }
-fn vlm_default_openai_model() -> String { "gpt-4o".into() }
+fn vlm_default_provider() -> String {
+    "ollama".into()
+}
+fn vlm_default_ollama_model() -> String {
+    "qwen2.5-vl:7b".into()
+}
+fn vlm_default_ollama_url() -> String {
+    "http://localhost:11434".into()
+}
+fn vlm_default_openai_model() -> String {
+    "gpt-4o".into()
+}
 
 impl Default for VlmSettings {
     fn default() -> Self {
@@ -123,9 +135,15 @@ pub struct TtsSettings {
     pub openai_key: Option<String>,
 }
 
-fn tts_default_provider() -> String { "kokoro".into() }
-fn tts_default_voice() -> String { "af_heart".into() }
-fn tts_default_openai_voice() -> String { "nova".into() }
+fn tts_default_provider() -> String {
+    "kokoro".into()
+}
+fn tts_default_voice() -> String {
+    "af_heart".into()
+}
+fn tts_default_openai_voice() -> String {
+    "nova".into()
+}
 
 impl Default for TtsSettings {
     fn default() -> Self {
