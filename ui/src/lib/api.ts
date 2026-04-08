@@ -223,6 +223,17 @@ export interface PipelineResult {
   answer: string;
   /** Base64-encoded WAV bytes of the TTS response. */
   audio_b64: string;
+  /** Grounding steps (empty array in text-only mode). */
+  steps: GroundingStep[];
+}
+
+/** A single VLM-grounded action step with normalised coordinates. */
+export interface GroundingStep {
+  /** Normalised horizontal position (0 = left edge, 1 = right edge). */
+  x: number;
+  /** Normalised vertical position (0 = top edge, 1 = bottom edge). */
+  y: number;
+  explanation: string;
 }
 
 /** Listen for push-to-talk state transitions from the Rust shell. */

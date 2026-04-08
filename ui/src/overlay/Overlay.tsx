@@ -1,17 +1,19 @@
 // Transparent always-on-top overlay window.
 //
 // P3: Shows a HUD bubble (recording indicator, transcript, answer) driven by
-// hotkey-state and pipeline-result Tauri events.  The click-annotation layer
-// (SVG cursor paths) arrives in P4.
+// hotkey-state and pipeline-result Tauri events.
+// P4: Adds the SVG Annotation layer for grounding results.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  GroundingStep,
   HotkeyState,
   PipelineResult,
   onHotkeyState,
   onPipelineResult,
   playAudioB64,
 } from "../lib/api";
+import { Annotation } from "./Annotation";
 
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -28,6 +30,7 @@ const IDLE: HudState = { phase: "idle" };
 
 export function Overlay() {
   const [hud, setHud] = useState<HudState>(IDLE);
+  const [groundingSteps, setGroundingSteps] = useState<GroundingStep[]>([]);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scheduleAutoDismiss = useCallback(() => {
@@ -55,6 +58,10 @@ export function Overlay() {
     subs.push(
       onPipelineResult(async (r: PipelineResult) => {
         setHud({ phase: "result", transcript: r.transcript, answer: r.answer });
+        // Show grounding annotation if steps were returned
+        if (r.steps && r.steps.length > 0) {
+          setGroundingSteps(r.steps);
+        }
         scheduleAutoDismiss();
         if (r.audio_b64) {
           try {
@@ -72,26 +79,39 @@ export function Overlay() {
     };
   }, [scheduleAutoDismiss]);
 
-  if (hud.phase === "idle") {
+  if (hud.phase === "idle" && groundingSteps.length === 0) {
     // Invisible when idle — don't render anything that could block events.
     return null;
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 48,
-        left: "50%",
-        transform: "translateX(-50%)",
-        maxWidth: 560,
-        minWidth: 240,
-        pointerEvents: "none",
-        fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
-      }}
-    >
-      <HudBubble hud={hud} />
-    </div>
+    <>
+      {/* SVG cursor-path annotation (P4: grounding results) */}
+      {groundingSteps.length > 0 && (
+        <Annotation
+          steps={groundingSteps}
+          onDone={() => setGroundingSteps([])}
+        />
+      )}
+
+      {/* HUD bubble */}
+      {hud.phase !== "idle" && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 48,
+            left: "50%",
+            transform: "translateX(-50%)",
+            maxWidth: 560,
+            minWidth: 240,
+            pointerEvents: "none",
+            fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+          }}
+        >
+          <HudBubble hud={hud} />
+        </div>
+      )}
+    </>
   );
 }
 

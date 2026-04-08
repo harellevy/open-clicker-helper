@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
@@ -118,6 +119,21 @@ pub async fn ping_sidecar(state: State<'_, AppState>) -> AppResult<SidecarHealth
     let value = sidecar.call("ping", json!({})).await?;
     let parsed: SidecarHealth = serde_json::from_value(value).map_err(AppError::from)?;
     Ok(parsed)
+}
+
+/// Capture the primary display and return it as a base-64-encoded PNG.
+///
+/// Returns `None` on non-macOS platforms or when screen recording permission
+/// has not been granted.
+#[tauri::command]
+pub fn capture_screen() -> AppResult<Option<String>> {
+    match platform::current().capture().capture_focused_window() {
+        Ok(png) => Ok(Some(base64::engine::general_purpose::STANDARD.encode(&png))),
+        Err(e) => {
+            tracing::warn!("capture_screen: {e}");
+            Ok(None)
+        }
+    }
 }
 
 /// Generic JSON-RPC pass-through to the Python sidecar.

@@ -13,6 +13,9 @@
         width: 100vw;
         height: 100vh;
         pointer-events: none;
+        /* DEBUG: red outline shows the overlay boundary */
+        box-sizing: border-box;
+        border: 2px dashed rgba(255, 0, 0, 0.5);
       }
       @keyframes pulse {
         0%, 100% { opacity: 1; transform: scale(1); }

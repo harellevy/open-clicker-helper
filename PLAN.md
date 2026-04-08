@@ -183,12 +183,30 @@ UI for re-configuring everything.
 - `pipeline.run` (text-only mode): audio → STT → LLM text answer → TTS → play.
 - HUD shows transcript bubble. Confirms full hotkey → audio → response loop works.
 
-**P4 — vision grounding (the core feature)**
-- `platform/macos/capture.rs`: `scap` per-window capture; exclude the overlay window.
-- `vlm_ollama.py`: call Ollama `/api/chat` with `qwen2.5-vl:7b`; parse `{steps}` JSON from response.
-- `grounding.locate`: validate, clamp to [0,1], retry once on parse failure.
-- `Annotation.tsx`: SVG cursor + bezier path animation; spring-physics easing.
-- Smoke test on real apps: System Settings, Finder, Safari.
+**P4 — vision grounding (the core feature)** ✅
+- `platform/macos/capture.rs`: screenshot via `screencapture -x` CLI (no extra deps); future P4.1 replaces with `scap` for per-window capture.
+- `grounding.py`: prompt VLM to return structured `{steps: [{x,y,explanation}]}` JSON; validate + clamp to [0,1]; retry once with stricter prompt on parse failure.
+- `pipeline.py`: when `image_b64` present, enters grounding mode (STT → grounding → TTS); text-only mode otherwise.
+- `Annotation.tsx`: full-screen SVG layer — cursor dot follows cubic-bezier path to each step with spring-physics easing; sequential multi-step animation with 300 ms pause.
+- `animator.ts`: `spring()`, `easeInOut()`, `lerp()`, `bezierPath()`, `animate()` helpers.
+- `capture_screen` IPC command exposed to frontend.
+
+**P4.1 — iterative multi-step grounding** *(planned)*
+
+Real UI flows require re-grounding after each user action, not a single up-front batch:
+
+1. Ground step 1 against initial screenshot → animate cursor → **click** (via `cliclick` or Accessibility API).
+2. Wait for UI to settle (configurable delay, default 800 ms).
+3. Capture a **fresh screenshot** of the updated UI.
+4. Re-ground step 2 against the new screenshot → animate → click.
+5. Repeat until all steps complete or an error occurs.
+
+This requires:
+- `platform/macos/mouse.rs`: synthesise a click at normalised coordinates using `CGEvent`.
+- New `pipeline.step` RPC method (streaming) that yields `(screenshot_b64, step)` one at a time.
+- Rust coordinates the loop: receives each step, clicks, captures, sends next screenshot.
+- `Annotation.tsx` stays per-step (already correct architecture).
+- Settings: "step delay" slider (0–2 s); "max steps" cap (default 8).
 
 **P5 — first-run model wizard**
 - `Models.tsx` checks for `~/Library/Application Support/` Ollama models + mlx-whisper cache.
