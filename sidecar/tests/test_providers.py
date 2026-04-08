@@ -118,7 +118,7 @@ class TestKokoroTts:
 class TestOllamaConfig:
     def test_defaults(self):
         cfg = OllamaConfig()
-        assert cfg.ollama_model == "qwen2.5-vl:7b"
+        assert cfg.ollama_model == "qwen2.5vl:7b"
         assert cfg.ollama_url == "http://localhost:11434"
 
     def test_custom_values(self):
@@ -134,7 +134,7 @@ class TestOllamaVlm:
 
     def test_default_init(self):
         vlm = OllamaVlm()
-        assert vlm._model == "qwen2.5-vl:7b"
+        assert vlm._model == "qwen2.5vl:7b"
         assert vlm._base_url == "http://localhost:11434"
 
     def test_kwarg_init(self):
