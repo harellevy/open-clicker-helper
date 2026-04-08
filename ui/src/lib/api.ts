@@ -39,12 +39,25 @@ export interface TtsSettings {
   openai_key: string | null;
 }
 
+export interface DebugSettings {
+  enabled: boolean;
+}
+
+export interface SystemPromptsSettings {
+  /** Prompt for the VLM grounding call (the one that returns click JSON). */
+  grounding: string;
+  /** Prompt for the debug-only "describe the screen" caption call. */
+  caption: string;
+}
+
 export interface Settings {
   setup_complete: boolean;
   hotkey: string;
   stt: SttSettings;
   vlm: VlmSettings;
   tts: TtsSettings;
+  debug: DebugSettings;
+  system_prompts: SystemPromptsSettings;
 }
 
 export function defaultSettings(): Settings {
@@ -70,6 +83,8 @@ export function defaultSettings(): Settings {
       openai_voice: "nova",
       openai_key: null,
     },
+    debug: { enabled: false },
+    system_prompts: { grounding: "", caption: "" },
   };
 }
 
@@ -218,6 +233,32 @@ export type HotkeyState =
   | { state: "processing" }
   | { state: "error"; message: string };
 
+/** Per-stage timing measurements, in milliseconds. */
+export interface PipelineTimings {
+  stt_ms?: number;
+  downscale_ms?: number;
+  caption_ms?: number;
+  grounding_ms?: number;
+  llm_ms?: number;
+  tts_ms?: number;
+  total_ms?: number;
+}
+
+/** Debug payload attached to pipeline results when debug mode is on. */
+export interface PipelineDebug {
+  transcript: string;
+  caption?: string;
+  screenshot_b64?: string;
+  orig_size?: [number, number];
+  new_size?: [number, number];
+  orig_bytes?: number;
+  new_bytes?: number;
+  grounding_raw?: string;
+  steps?: GroundingStep[];
+  timings?: PipelineTimings;
+  answer?: string;
+}
+
 /** Final result emitted when the pipeline completes successfully. */
 export interface PipelineResult {
   transcript: string;
@@ -226,6 +267,59 @@ export interface PipelineResult {
   audio_b64: string;
   /** Grounding steps (empty array in text-only mode). */
   steps: GroundingStep[];
+  /** Per-stage timings (milliseconds). */
+  timings?: PipelineTimings;
+  /** Present only when debug mode is enabled in settings. */
+  debug?: PipelineDebug;
+}
+
+/** Progress notification from the sidecar relay (pipeline stage updates). */
+export interface PipelineProgress {
+  id: number;
+  event: string; // "stt_start" | "stt_done" | "image_downscaled" | ...
+  payload: {
+    transcript?: string;
+    answer?: string;
+    elapsed_ms?: number;
+    caption?: string;
+    image_b64?: string;
+    orig_size?: [number, number];
+    new_size?: [number, number];
+    orig_bytes?: number;
+    new_bytes?: number;
+    steps?: GroundingStep[];
+    raw?: string;
+    error?: string;
+  };
+}
+
+/** Known pipeline stage event names the overlay reacts to. */
+const PIPELINE_EVENTS = new Set([
+  "stt_start",
+  "stt_done",
+  "image_downscaled",
+  "caption_start",
+  "caption_done",
+  "grounding_start",
+  "grounding_done",
+  "llm_start",
+  "llm_done",
+  "tts_start",
+  "tts_done",
+  "error",
+]);
+
+/** Listen for per-stage pipeline progress events (debug-mode UI).
+ * Shares the `sidecar://progress` Tauri channel with setup downloads, but
+ * filters by event name so those streams don't confuse each other. */
+export function onPipelineProgress(
+  cb: (p: PipelineProgress) => void,
+): Promise<() => void> {
+  return listen<PipelineProgress>("sidecar://progress", (ev) => {
+    const payload = ev.payload as unknown as PipelineProgress;
+    if (!payload || !PIPELINE_EVENTS.has(payload.event)) return;
+    cb(payload);
+  });
 }
 
 /** A single VLM-grounded action step with normalised coordinates. */

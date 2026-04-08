@@ -26,6 +26,15 @@ pub struct Settings {
     pub vlm: VlmSettings,
     #[serde(default)]
     pub tts: TtsSettings,
+
+    /// Debug mode — when enabled the overlay shows per-stage timings, a
+    /// downscaled screenshot preview, and the raw VLM output.
+    #[serde(default)]
+    pub debug: DebugSettings,
+
+    /// User-editable system prompts, one per stage of the pipeline.
+    #[serde(default)]
+    pub system_prompts: SystemPrompts,
 }
 
 fn default_hotkey() -> String {
@@ -40,8 +49,29 @@ impl Default for Settings {
             stt: SttSettings::default(),
             vlm: VlmSettings::default(),
             tts: TtsSettings::default(),
+            debug: DebugSettings::default(),
+            system_prompts: SystemPrompts::default(),
         }
     }
+}
+
+/// Debug-mode toggle (plus a knob for how long each overlay stage sticks
+/// around, so users can tune the UX to their tolerance).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DebugSettings {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// System prompts the user can customise per stage of the pipeline. These
+/// strings are forwarded verbatim to the sidecar; an empty string means "use
+/// the sidecar's built-in default".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SystemPrompts {
+    #[serde(default)]
+    pub grounding: String,
+    #[serde(default)]
+    pub caption: String,
 }
 
 /// Speech-to-text configuration.
@@ -207,5 +237,43 @@ mod tests {
         let json = r#"{"setup_complete":true}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(s.setup_complete);
+    }
+
+    #[test]
+    fn debug_defaults_off() {
+        let s = Settings::default();
+        assert!(!s.debug.enabled);
+    }
+
+    #[test]
+    fn debug_enabled_roundtrips() {
+        let json = r#"{"debug":{"enabled":true}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.debug.enabled);
+    }
+
+    #[test]
+    fn system_prompts_default_empty() {
+        let s = Settings::default();
+        assert!(s.system_prompts.grounding.is_empty());
+        assert!(s.system_prompts.caption.is_empty());
+    }
+
+    #[test]
+    fn system_prompts_roundtrip() {
+        let json = r#"{"system_prompts":{"grounding":"hi","caption":"describe"}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.system_prompts.grounding, "hi");
+        assert_eq!(s.system_prompts.caption, "describe");
+    }
+
+    #[test]
+    fn legacy_settings_without_new_fields_still_parse() {
+        // A settings.json written by an older build must deserialize cleanly
+        // — new fields fall back to defaults.
+        let json = r#"{"setup_complete":true,"hotkey":"Ctrl+Shift+X"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.debug.enabled);
+        assert!(s.system_prompts.grounding.is_empty());
     }
 }

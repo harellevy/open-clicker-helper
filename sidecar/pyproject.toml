@@ -10,6 +10,7 @@ dependencies = [
   "httpx>=0.28",
   "soundfile>=0.12.1",
   "numpy>=1.24",
+  "Pillow>=10.0",
   "mlx-whisper>=0.3.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
   "kokoro>=0.9.4",
 ]
