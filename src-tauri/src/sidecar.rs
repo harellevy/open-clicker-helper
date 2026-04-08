@@ -12,7 +12,7 @@
 //! - one fewer thing to crash on first launch
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -55,7 +55,7 @@ impl Sidecar {
     /// Spawn `uv run --project <sidecar_dir> och-sidecar`.
     /// `sidecar_dir` should be the bundled (or dev) path to the
     /// `sidecar/` directory containing `pyproject.toml`.
-    pub async fn spawn(uv_binary: &PathBuf, sidecar_dir: &PathBuf) -> AppResult<Self> {
+    pub async fn spawn(uv_binary: &Path, sidecar_dir: &Path) -> AppResult<Self> {
         let mut child = Command::new(uv_binary)
             .args([
                 "run",

@@ -2,6 +2,8 @@
 //! `cargo check`). The Windows impl will replace this file once we add the
 //! `windows/` module.
 
+#![allow(dead_code)]
+
 use tauri::WebviewWindow;
 
 use crate::error::{AppError, AppResult};

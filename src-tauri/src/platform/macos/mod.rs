@@ -7,8 +7,6 @@ mod mouse;
 mod permissions;
 mod window;
 
-pub use window::MacOverlay;
-
 pub struct MacOsPlatform;
 
 impl Platform for MacOsPlatform {

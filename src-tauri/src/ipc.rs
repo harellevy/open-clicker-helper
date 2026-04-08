@@ -3,7 +3,7 @@ use serde_json::json;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::platform::{self, Permissions as PermTrait};
+use crate::platform;
 use crate::AppState;
 
 #[derive(Debug, Serialize, Clone)]

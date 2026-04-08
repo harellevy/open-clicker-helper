@@ -50,7 +50,6 @@ pub fn run() {
             if let Some(overlay) = app.get_webview_window("overlay") {
                 #[cfg(target_os = "macos")]
                 {
-                    use crate::platform::OverlayWindow;
                     let configurator = platform::current().overlay();
                     if let Err(e) = configurator.make_click_through_topmost(&overlay) {
                         tracing::warn!("overlay configuration failed: {e}");

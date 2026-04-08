@@ -3,6 +3,13 @@
 //! All OS-specific code lives behind these traits so the eventual Windows
 //! port only needs to add a sibling `windows/` module without touching the
 //! Rust shell, the React UI, or the Python sidecar.
+//!
+//! Most of the surface area below is scaffolding for capabilities that land
+//! in later phases (overlay/capture/mouse). On non-macOS targets the only
+//! caller today is the permissions IPC, so we silence dead-code there until
+//! P3/P4 wire the rest up.
+
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use tauri::WebviewWindow;
 
