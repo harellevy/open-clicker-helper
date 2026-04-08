@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "open-clicker-helper",
+  "version": "0.0.1",
+  "identifier": "so.openclicker.helper",
+  "build": {
+    "beforeDevCommand": "pnpm --filter open-clicker-helper-ui dev",
+    "beforeBuildCommand": "pnpm --filter open-clicker-helper-ui build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "settings",
+        "title": "open-clicker-helper",
+        "width": 880,
+        "height": 620,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "visible": true,
+        "url": "index.html"
+      },
+      {
+        "label": "overlay",
+        "title": "overlay",
+        "width": 1440,
+        "height": 900,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "focus": false,
+        "url": "overlay.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.3"
+    }
+  }
+}

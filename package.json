@@ -1,0 +1,20 @@
+{
+  "name": "open-clicker-helper",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Open-source offline-first AI clicker buddy for your desktop",
+  "license": "MIT",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm --filter open-clicker-helper-ui dev",
+    "build": "pnpm --filter open-clicker-helper-ui build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "lint": "pnpm --filter open-clicker-helper-ui lint",
+    "typecheck": "pnpm --filter open-clicker-helper-ui typecheck"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

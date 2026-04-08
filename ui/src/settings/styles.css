@@ -1,0 +1,51 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  background: #f6f6f7;
+  color: #1d1d1f;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #1c1c1e;
+    color: #f5f5f7;
+  }
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+
+.app__header {
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+}
+
+.app__main {
+  padding: 24px;
+  overflow: auto;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.status--granted { background: rgba(52, 199, 89, 0.18); color: #1d8a3a; }
+.status--denied  { background: rgba(255, 59, 48, 0.18); color: #b3251b; }
+.status--unknown { background: rgba(142, 142, 147, 0.18); color: #6b6b70; }
