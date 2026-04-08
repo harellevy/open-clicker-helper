@@ -14,6 +14,16 @@ import pytest
 from och_sidecar import pipeline as _pipeline
 
 
+@pytest.fixture(autouse=True)
+def _reset_provider_cache():
+    """The provider cache is module-level state; reset it between tests so
+    one test patching a provider class doesn't see a stale instance built by
+    a previous test."""
+    _pipeline.reset_provider_cache()
+    yield
+    _pipeline.reset_provider_cache()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -212,3 +222,61 @@ class TestPipelineMakeHelpers:
             config_arg = MockTts.call_args[0][0]
             assert config_arg.kokoro_voice == "bm_lewis"
             assert config_arg.kokoro_speed == pytest.approx(1.2)
+
+
+class TestProviderCache:
+    """Cached providers across pipeline.run() calls — fixes the apparent
+    memory leak from reloading Whisper / Kokoro models on every recording."""
+
+    def test_same_settings_returns_same_instance(self):
+        settings = {"tts": {"kokoro_voice": "af_heart", "kokoro_speed": 1.0}}
+        with patch("och_sidecar.providers.tts_kokoro.KokoroTts") as MockTts:
+            MockTts.side_effect = lambda *_a, **_k: MagicMock(name="kokoro")
+            a = _pipeline._make_tts(settings)
+            b = _pipeline._make_tts(settings)
+        assert a is b
+        assert MockTts.call_count == 1
+
+    def test_different_voice_replaces_cached_instance(self):
+        with patch("och_sidecar.providers.tts_kokoro.KokoroTts") as MockTts:
+            MockTts.side_effect = lambda *_a, **_k: MagicMock(name="kokoro")
+            a = _pipeline._make_tts({"tts": {"kokoro_voice": "af_heart"}})
+            b = _pipeline._make_tts({"tts": {"kokoro_voice": "bm_lewis"}})
+        assert a is not b
+        assert MockTts.call_count == 2
+
+    def test_stt_cached_across_calls(self):
+        with patch("och_sidecar.providers.stt_mlx_whisper.MlxWhisperStt") as MockStt:
+            MockStt.side_effect = lambda *_a, **_k: MagicMock(name="stt")
+            a = _pipeline._make_stt({})
+            b = _pipeline._make_stt({})
+        assert a is b
+        assert MockStt.call_count == 1
+
+    def test_vlm_cached_across_calls(self):
+        with patch("och_sidecar.providers.vlm_ollama.OllamaVlm") as MockVlm:
+            MockVlm.side_effect = lambda *_a, **_k: MagicMock(name="vlm")
+            a = _pipeline._make_vlm({})
+            b = _pipeline._make_vlm({})
+        assert a is b
+        assert MockVlm.call_count == 1
+
+
+class TestOllamaTimeout:
+    """Vision inference on a 7B local model with a multi-MB screenshot
+    routinely takes >60s on cold start. Pin the new generous timeout."""
+
+    def test_complete_with_image_uses_long_read_timeout(self):
+        import httpx
+        from och_sidecar.providers.vlm_ollama import OllamaVlm
+
+        vlm = OllamaVlm()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "ok"}}
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            vlm.complete("describe", image_bytes=b"fake png")
+
+        timeout = mock_post.call_args.kwargs["timeout"]
+        assert isinstance(timeout, httpx.Timeout)
+        assert timeout.read >= 300.0

@@ -94,16 +94,36 @@ class RpcServer:
         # Streaming handlers yield (event, payload) tuples and may finish with
         # ('result', value). We translate yields into JSON-RPC notifications
         # carrying `id` so the Rust client can correlate.
+        #
+        # Iteration is wrapped in try/except so that an exception raised
+        # *inside* the generator (e.g. a ProviderError mid-pipeline) gets
+        # reported as an RPC error instead of bubbling out of `_handle()`,
+        # tearing down `serve_forever()`, and crashing the sidecar process.
         if hasattr(result, "__iter__") and not isinstance(result, (dict, list, str, bytes)):
             final: Any = None
-            for event, payload in result:
-                if event == "result":
-                    # Emit as notification first so the UI's handleProgress can
-                    # transition to done/error, then send as the RPC response.
-                    self._send_notification(method, {"id": req_id, "event": "result", "payload": payload})
-                    final = payload
-                    break
-                self._send_notification(method, {"id": req_id, "event": event, "payload": payload})
+            try:
+                for event, payload in result:
+                    if event == "result":
+                        # Emit as notification first so the UI's
+                        # handleProgress can transition to done/error,
+                        # then send as the RPC response.
+                        self._send_notification(method, {"id": req_id, "event": "result", "payload": payload})
+                        final = payload
+                        break
+                    self._send_notification(method, {"id": req_id, "event": event, "payload": payload})
+            except RpcError as e:
+                self._send_error(req_id, e.code, e.message, e.data)
+                return
+            except Exception as e:  # noqa: BLE001
+                log.exception("streaming handler %s failed", method)
+                # Tell the UI explicitly so its progress bar can flip to
+                # error, then send the JSON-RPC error response.
+                self._send_notification(
+                    method,
+                    {"id": req_id, "event": "error", "payload": {"error": str(e)}},
+                )
+                self._send_error(req_id, INTERNAL_ERROR, str(e))
+                return
             self._send_result(req_id, final)
         else:
             self._send_result(req_id, result)
