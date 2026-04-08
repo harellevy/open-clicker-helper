@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 def run(
     audio_b64: str,
     image_b64: str | None,
-    settings: dict[str, Any],
+    settings: dict[str, Any] | None,
 ) -> Iterator[tuple[str, Any]]:
     """Generator pipeline for a single voice round-trip.
 
@@ -51,6 +51,7 @@ def run(
         ``(event_name, payload)`` tuples consumed by the RPC streaming layer.
         The final yield is ``("result", {...})``.
     """
+    settings = settings or {}
     audio_bytes = base64.b64decode(audio_b64)
     image_bytes = base64.b64decode(image_b64) if image_b64 else None
 

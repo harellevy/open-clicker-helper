@@ -318,7 +318,7 @@ fn load_settings_json(app: &tauri::AppHandle) -> serde_json::Value {
     app.store(store::STORE_FILE)
         .ok()
         .and_then(|s| s.get(store::SETTINGS_KEY))
-        .unwrap_or(serde_json::Value::Null)
+        .unwrap_or_else(|| serde_json::json!({}))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
