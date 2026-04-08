@@ -1,5 +1,7 @@
 //! Mouse position polling. P3 swaps the polling loop in for an event tap.
 
+#![allow(dead_code)]
+
 use core_graphics::event::CGEvent;
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 

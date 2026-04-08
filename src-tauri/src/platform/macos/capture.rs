@@ -1,5 +1,7 @@
 //! Screen capture stub. P4 wires this to `scap` (ScreenCaptureKit).
 
+#![allow(dead_code)]
+
 use crate::error::{AppError, AppResult};
 use crate::platform::ScreenCapture;
 

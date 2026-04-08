@@ -5,11 +5,12 @@
 //! Rust shell, the React UI, or the Python sidecar.
 //!
 //! Most of the surface area below is scaffolding for capabilities that land
-//! in later phases (overlay/capture/mouse). On non-macOS targets the only
-//! caller today is the permissions IPC, so we silence dead-code there until
-//! P3/P4 wire the rest up.
+//! in later phases. Today only `permissions()` (via ipc) and `overlay()` (on
+//! macOS) have callers — `capture()` and `mouse()` arrive in P3/P4. We keep
+//! the trait surface stable and silence dead-code so CI stays green until
+//! the callers land.
 
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#![allow(dead_code)]
 
 use tauri::WebviewWindow;
 
