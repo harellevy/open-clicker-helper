@@ -50,3 +50,44 @@ def test_missing_jsonrpc_version_is_invalid_request() -> None:
 def test_providers_list_shape() -> None:
     [resp] = _run([{"jsonrpc": "2.0", "id": 4, "method": "providers.list"}])
     assert set(resp["result"].keys()) == {"stt", "tts", "llm", "vlm"}
+
+
+def test_streaming_handler_exception_does_not_kill_server() -> None:
+    """An exception raised mid-iteration of a streaming handler must be
+    reported as a JSON-RPC error and the server must keep serving the next
+    request — not propagate out of `serve_forever()` and crash the sidecar."""
+
+    def boom(_params):
+        yield ("status", {"msg": "starting"})
+        raise RuntimeError("kaboom")
+
+    stdin = io.BytesIO(
+        b"".join(
+            (json.dumps(r) + "\n").encode()
+            for r in [
+                {"jsonrpc": "2.0", "id": 1, "method": "boom"},
+                {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+            ]
+        )
+    )
+    stdout = io.BytesIO()
+    dispatcher = build_dispatcher() | {"boom": boom}
+    RpcServer(stdin=stdin, stdout=stdout, dispatcher=dispatcher).serve_forever()
+    stdout.seek(0)
+    msgs = [json.loads(line) for line in stdout.read().splitlines() if line.strip()]
+
+    # Expect: status notification, error notification, error response,
+    # then a successful ping response — server didn't die.
+    notifications = [m for m in msgs if "method" in m]
+    responses = [m for m in msgs if "id" in m and ("result" in m or "error" in m)]
+
+    assert any(
+        n.get("params", {}).get("event") == "error"
+        and "kaboom" in n["params"]["payload"]["error"]
+        for n in notifications
+    )
+    err_resp = next(r for r in responses if r["id"] == 1)
+    assert err_resp["error"]["code"] == -32603
+    assert "kaboom" in err_resp["error"]["message"]
+    ping_resp = next(r for r in responses if r["id"] == 2)
+    assert ping_resp["result"]["ok"] is True

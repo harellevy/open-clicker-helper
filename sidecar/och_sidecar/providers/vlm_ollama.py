@@ -65,11 +65,16 @@ class OllamaVlm(VlmProvider):
         else:
             messages = [{"role": "user", "content": prompt}]
 
+        # Vision inference on a 7B local model with a multi-MB screenshot
+        # easily blows past 60s on cold start. Use a generous timeout for the
+        # body read, but cap connect/write so a wedged Ollama still surfaces
+        # quickly.
+        timeout = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
         try:
             resp = httpx.post(
                 f"{self._base_url}/api/chat",
                 json={"model": self._model, "messages": messages, "stream": False},
-                timeout=60.0,
+                timeout=timeout,
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:

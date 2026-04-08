@@ -28,11 +28,41 @@ sends that payload as the JSON-RPC result.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+
+# ── Provider cache ────────────────────────────────────────────────────────────
+#
+# Each pipeline.run() call would otherwise instantiate fresh STT/VLM/TTS
+# providers, which for KokoroTts means loading a Torch KPipeline (model +
+# voices) on every recording. Python/PyTorch don't always free those promptly,
+# so RSS climbs request after request and looks like a leak.
+#
+# Cache one instance per (kind, settings-fingerprint). When the user changes
+# settings the fingerprint changes and we drop the old instance — fine because
+# only the *latest* instance is reachable, so the previous model can actually
+# be GC'd.
+_provider_cache: dict[str, tuple[str, Any]] = {}
+
+
+def _cached(kind: str, fingerprint_obj: Any, build: Callable[[], Any]) -> Any:
+    fingerprint = json.dumps(fingerprint_obj, sort_keys=True, default=str)
+    cur = _provider_cache.get(kind)
+    if cur is not None and cur[0] == fingerprint:
+        return cur[1]
+    instance = build()
+    _provider_cache[kind] = (fingerprint, instance)
+    return instance
+
+
+def reset_provider_cache() -> None:
+    """Drop every cached provider. Used by tests."""
+    _provider_cache.clear()
 
 
 def run(
@@ -116,13 +146,19 @@ def _make_stt(settings: dict[str, Any]):
     provider = stt_cfg.get("provider", "mlx-whisper")
 
     if provider == "openai":
-        from .providers.stt_openai import OpenAIStt, OpenAISttConfig
-        return OpenAIStt(OpenAISttConfig(openai_key=stt_cfg.get("openai_key") or ""))
+        def build():
+            from .providers.stt_openai import OpenAIStt, OpenAISttConfig
+            return OpenAIStt(OpenAISttConfig(openai_key=stt_cfg.get("openai_key") or ""))
+        return _cached("stt", ["openai", stt_cfg.get("openai_key") or ""], build)
 
     # default: mlx-whisper
-    from .providers.stt_mlx_whisper import MlxWhisperConfig, MlxWhisperStt
     model = stt_cfg.get("mlx_model", "mlx-community/whisper-base-mlx")
-    return MlxWhisperStt(MlxWhisperConfig(mlx_model=model))
+
+    def build():
+        from .providers.stt_mlx_whisper import MlxWhisperConfig, MlxWhisperStt
+        return MlxWhisperStt(MlxWhisperConfig(mlx_model=model))
+
+    return _cached("stt", ["mlx-whisper", model], build)
 
 
 def _make_vlm(settings: dict[str, Any]):
@@ -130,23 +166,33 @@ def _make_vlm(settings: dict[str, Any]):
     provider = vlm_cfg.get("provider", "ollama")
 
     if provider == "openai":
-        from .providers.vlm_openai import OpenAIVlm, OpenAIVlmConfig
-        return OpenAIVlm(OpenAIVlmConfig(
-            openai_key=vlm_cfg.get("openai_key") or "",
-            openai_model=vlm_cfg.get("openai_model", "gpt-4o"),
-        ))
+        key = vlm_cfg.get("openai_key") or ""
+        model = vlm_cfg.get("openai_model", "gpt-4o")
+
+        def build():
+            from .providers.vlm_openai import OpenAIVlm, OpenAIVlmConfig
+            return OpenAIVlm(OpenAIVlmConfig(openai_key=key, openai_model=model))
+
+        return _cached("vlm", ["openai", key, model], build)
 
     if provider == "anthropic":
-        from .providers.vlm_anthropic import AnthropicVlm, AnthropicVlmConfig
-        return AnthropicVlm(AnthropicVlmConfig(
-            anthropic_key=vlm_cfg.get("anthropic_key") or "",
-        ))
+        key = vlm_cfg.get("anthropic_key") or ""
+
+        def build():
+            from .providers.vlm_anthropic import AnthropicVlm, AnthropicVlmConfig
+            return AnthropicVlm(AnthropicVlmConfig(anthropic_key=key))
+
+        return _cached("vlm", ["anthropic", key], build)
 
     # default: ollama
-    from .providers.vlm_ollama import OllamaConfig, OllamaVlm
     model = vlm_cfg.get("ollama_model", "qwen2.5vl:7b")
     url = vlm_cfg.get("ollama_url", "http://localhost:11434")
-    return OllamaVlm(OllamaConfig(ollama_model=model, ollama_url=url))
+
+    def build():
+        from .providers.vlm_ollama import OllamaConfig, OllamaVlm
+        return OllamaVlm(OllamaConfig(ollama_model=model, ollama_url=url))
+
+    return _cached("vlm", ["ollama", model, url], build)
 
 
 def _make_tts(settings: dict[str, Any]):
@@ -154,14 +200,21 @@ def _make_tts(settings: dict[str, Any]):
     provider = tts_cfg.get("provider", "kokoro")
 
     if provider == "openai":
-        from .providers.tts_openai import OpenAITts, OpenAITtsConfig
-        return OpenAITts(OpenAITtsConfig(
-            openai_key=tts_cfg.get("openai_key") or "",
-            voice=tts_cfg.get("openai_voice", "nova"),
-        ))
+        key = tts_cfg.get("openai_key") or ""
+        voice = tts_cfg.get("openai_voice", "nova")
+
+        def build():
+            from .providers.tts_openai import OpenAITts, OpenAITtsConfig
+            return OpenAITts(OpenAITtsConfig(openai_key=key, voice=voice))
+
+        return _cached("tts", ["openai", key, voice], build)
 
     # default: kokoro
-    from .providers.tts_kokoro import KokoroConfig, KokoroTts
     voice = tts_cfg.get("kokoro_voice", "af_heart")
     speed = float(tts_cfg.get("kokoro_speed", 1.0))
-    return KokoroTts(KokoroConfig(kokoro_voice=voice, kokoro_speed=speed))
+
+    def build():
+        from .providers.tts_kokoro import KokoroConfig, KokoroTts
+        return KokoroTts(KokoroConfig(kokoro_voice=voice, kokoro_speed=speed))
+
+    return _cached("tts", ["kokoro", voice, speed], build)
