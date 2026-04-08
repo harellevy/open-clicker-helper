@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from typing import Any
 
 from .base import ProviderConfig, ProviderError, SttProvider
@@ -46,12 +44,30 @@ class MlxWhisperStt(SttProvider):
                 "Install with: uv pip install mlx-whisper"
             ) from exc
 
-        # mlx-whisper expects a file path, not bytes — write to a temp file.
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(audio_wav)
-            tmp_path = f.name
-        try:
-            result = mlx_whisper.transcribe(tmp_path, path_or_hf_repo=self._model)
-            return result.get("text", "").strip()
-        finally:
-            os.unlink(tmp_path)
+        import io
+        import numpy as np
+        import soundfile as sf
+
+        # Decode WAV in Python — avoids requiring ffmpeg in PATH (Tauri apps
+        # don't inherit the shell PATH on macOS).
+        with io.BytesIO(audio_wav) as buf:
+            audio_array, sample_rate = sf.read(buf, dtype="float32", always_2d=False)
+
+        # Convert stereo → mono
+        if audio_array.ndim > 1:
+            audio_array = audio_array.mean(axis=1)
+
+        # Resample to 16 kHz (Whisper's expected sample rate)
+        target_sr = 16_000
+        if sample_rate != target_sr:
+            n_out = int(round(len(audio_array) * target_sr / sample_rate))
+            audio_array = np.interp(
+                np.linspace(0.0, len(audio_array) - 1, n_out),
+                np.arange(len(audio_array)),
+                audio_array,
+            ).astype(np.float32)
+
+        # Pass ndarray directly — mlx_whisper skips the ffmpeg load_audio call
+        # when given an array instead of a file path.
+        result = mlx_whisper.transcribe(audio_array, path_or_hf_repo=self._model)
+        return result.get("text", "").strip()

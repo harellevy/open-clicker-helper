@@ -52,8 +52,8 @@ def check_stt(model: str = "mlx-community/whisper-base-mlx") -> dict[str, Any]:
 def download_stt(
     model: str = "mlx-community/whisper-base-mlx",
 ) -> Iterator[tuple[str, Any]]:
-    """Download mlx-whisper model weights via huggingface_hub snapshot_download."""
-    yield ("status", {"step": "stt", "message": f"Checking mlx-whisper install…"})
+    """Download mlx-whisper model weights via huggingface_hub."""
+    yield ("status", {"step": "stt", "message": "Checking mlx-whisper install…"})
 
     if not _is_importable("mlx_whisper"):
         yield ("status", {"step": "stt", "message": "Installing mlx-whisper via uv…"})
@@ -63,9 +63,8 @@ def download_stt(
             yield ("result", {"ok": False, "step": "stt", "error": str(e)})
             return
 
-    yield ("status", {"step": "stt", "message": f"Downloading model {model}…"})
     try:
-        _hf_download_with_progress("stt", model)
+        yield from _hf_download_with_progress("stt", model)
     except Exception as e:  # noqa: BLE001
         yield ("result", {"ok": False, "step": "stt", "error": str(e)})
         return
@@ -207,11 +206,8 @@ def download_tts(voice: str = "af_heart") -> Iterator[tuple[str, Any]]:
             yield ("result", {"ok": False, "step": "tts", "error": str(e)})
             return
 
-    yield ("status", {"step": "tts", "message": f"Downloading voice model {voice}…"})
     try:
-        # kokoro-onnx fetches voices from HuggingFace on first use.
-        # We trigger that by importing and calling a lightweight check.
-        _hf_download_with_progress("tts", f"hexgrad/Kokoro-82M")
+        yield from _hf_download_with_progress("tts", "hexgrad/Kokoro-82M")
     except Exception as e:  # noqa: BLE001
         yield ("result", {"ok": False, "step": "tts", "error": str(e)})
         return
@@ -313,16 +309,36 @@ def _uv_add(packages: str) -> None:
         raise RuntimeError(result.stderr or result.stdout)
 
 
-def _hf_download_with_progress(step: str, repo_id: str) -> None:
-    """Download a HuggingFace repo snapshot; progress is logged but not streamed
-    (HF hub doesn't expose a simple progress callback without tqdm).  A future
-    iteration can parse tqdm stderr output for finer-grained progress."""
+def _hf_download_with_progress(
+    step: str, repo_id: str
+) -> Iterator[tuple[str, Any]]:
+    """Download a HuggingFace repo one file at a time, yielding per-file progress.
+
+    Each ``yield`` lets the RPC loop flush a notification to the frontend so the
+    progress bar advances between files.  Individual file downloads still block
+    (HF hub doesn't expose a streaming callback without patching tqdm), but the
+    granularity is typically fine enough for small-to-medium repos.
+    """
     try:
-        from huggingface_hub import snapshot_download  # type: ignore[import]
+        from huggingface_hub import hf_hub_download, list_repo_files  # type: ignore[import]
     except ImportError:
-        # huggingface_hub is a transitive dep of mlx-whisper; if it's missing
-        # the user hasn't installed the optional extras yet.
         raise RuntimeError(
             "huggingface_hub not available — install mlx-whisper first"
         )
-    snapshot_download(repo_id=repo_id, local_files_only=False)
+
+    # Fetch the file list; skip metadata-only blobs.
+    try:
+        files = sorted(
+            f for f in list_repo_files(repo_id)
+            if not f.endswith((".gitattributes", ".gitignore"))
+        )
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"Could not list files in {repo_id}: {e}") from e
+
+    n = len(files)
+    for i, filename in enumerate(files):
+        pct = int(i / n * 95)
+        yield ("progress", {"step": step, "progress": pct, "message": f"[{i + 1}/{n}] {filename}"})
+        hf_hub_download(repo_id=repo_id, filename=filename)
+
+    yield ("progress", {"step": step, "progress": 100, "message": "Download complete"})
