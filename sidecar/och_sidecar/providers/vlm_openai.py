@@ -48,7 +48,13 @@ class OpenAIVlm(VlmProvider):
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
 
-    def complete(self, prompt: str, image_bytes: bytes | None = None) -> str:
+    def complete(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> str:
         try:
             import openai  # type: ignore[import]
         except ImportError as exc:
@@ -63,13 +69,26 @@ class OpenAIVlm(VlmProvider):
             })
         content.append({"type": "text", "text": prompt})
 
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 1024,
+        }
+        if json_schema is not None:
+            # OpenAI's structured-output wrapper. `strict: True` makes the
+            # schema enforced exactly.
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "grounding",
+                    "schema": json_schema,
+                    "strict": True,
+                },
+            }
+
         client = openai.OpenAI(api_key=self._key)
         try:
-            resp = client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": content}],
-                max_tokens=1024,
-            )
+            resp = client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content.strip()
         except Exception as exc:  # noqa: BLE001
             raise ProviderError(f"OpenAI VLM failed: {exc}") from exc

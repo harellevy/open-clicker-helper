@@ -49,7 +49,21 @@ class OllamaVlm(VlmProvider):
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
 
-    def complete(self, prompt: str, image_bytes: bytes | None = None) -> str:
+    def complete(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        json_schema: dict[str, Any] | None = None,
+    ) -> str:
+        """Send a chat completion to Ollama.
+
+        When ``json_schema`` is provided, it is passed as the ``format`` field
+        to enable Ollama's structured-outputs mode — the model is constrained
+        to produce JSON matching the schema, which removes the need for the
+        prompt-based retry fallback in ``grounding.locate``.
+        See https://github.com/ollama/ollama/blob/main/docs/api.md
+        """
         if image_bytes is not None:
             # Ollama's /api/chat takes images as a sibling field to `content`,
             # not as OpenAI-style structured content parts. The base64 string
@@ -65,6 +79,14 @@ class OllamaVlm(VlmProvider):
         else:
             messages = [{"role": "user", "content": prompt}]
 
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "stream": False,
+        }
+        if json_schema is not None:
+            payload["format"] = json_schema
+
         # Vision inference on a 7B local model with a multi-MB screenshot
         # easily blows past 60s on cold start. Use a generous timeout for the
         # body read, but cap connect/write so a wedged Ollama still surfaces
@@ -73,7 +95,7 @@ class OllamaVlm(VlmProvider):
         try:
             resp = httpx.post(
                 f"{self._base_url}/api/chat",
-                json={"model": self._model, "messages": messages, "stream": False},
+                json=payload,
                 timeout=timeout,
             )
             resp.raise_for_status()
