@@ -103,12 +103,15 @@ export function Setup({ settings, onComplete }: Props) {
     } catch { /* ignore */ }
   }
 
-  async function fetchSttStatus() {
+  async function fetchSttStatus(autoDownload = false) {
     setSttProgress((p) => ({ ...p, status: "checking", message: "Checking…" }));
     try {
       const s = await api.setupCheckStt(draft.stt.mlx_model);
       setSttStatus(s);
       setSttProgress(idle());
+      if (autoDownload && draft.stt.provider === "mlx-whisper" && (!s.installed || !s.model_cached)) {
+        api.setupDownloadStt(draft.stt.mlx_model).catch(console.error);
+      }
     } catch (e) {
       setSttProgress({ status: "error", progress: 0, message: String(e) });
     }
@@ -125,23 +128,26 @@ export function Setup({ settings, onComplete }: Props) {
     }
   }
 
-  async function fetchTtsStatus() {
+  async function fetchTtsStatus(autoDownload = false) {
     setTtsProgress((p) => ({ ...p, status: "checking", message: "Checking…" }));
     try {
       const s = await api.setupCheckTts(draft.tts.kokoro_voice);
       setTtsStatus(s);
       setTtsProgress(idle());
+      if (autoDownload && draft.tts.provider === "kokoro" && (!s.installed || !s.voice_ready)) {
+        api.setupDownloadTts(draft.tts.kokoro_voice).catch(console.error);
+      }
     } catch (e) {
       setTtsProgress({ status: "error", progress: 0, message: String(e) });
     }
   }
 
-  // Fetch status when entering each step.
+  // Fetch status when entering each step; auto-start offline downloads.
   useEffect(() => {
     if (step === "permissions") fetchPermissions();
-    if (step === "stt") fetchSttStatus();
+    if (step === "stt") fetchSttStatus(true);
     if (step === "vlm") fetchVlmStatus();
-    if (step === "tts") fetchTtsStatus();
+    if (step === "tts") fetchTtsStatus(true);
   }, [step]);
 
   // ── Navigation ───────────────────────────────────────────────────────────
@@ -371,11 +377,6 @@ function SttStep({
           {status && (
             <StatusLine ok={isReady ?? false} message={status.message} />
           )}
-          {!isReady && !isActive && (
-            <button className="btn btn--primary" onClick={onDownload}>
-              Download weights
-            </button>
-          )}
           {isActive && (
             <ProgressBar
               progress={progress.progress}
@@ -383,7 +384,17 @@ function SttStep({
             />
           )}
           {progress.status === "error" && (
-            <p className="setup-error">{progress.error}</p>
+            <>
+              <p className="setup-error">{progress.error}</p>
+              <button className="btn btn--primary" onClick={onDownload}>
+                Retry download
+              </button>
+            </>
+          )}
+          {!isReady && !isActive && progress.status !== "error" && (
+            <button className="btn btn--ghost btn--sm" onClick={onDownload}>
+              Download manually
+            </button>
           )}
         </div>
       ) : (
@@ -573,16 +584,21 @@ function TtsStep({
             </select>
           </div>
           {status && <StatusLine ok={isReady ?? false} message={status.message} />}
-          {!isReady && !isActive && (
-            <button className="btn btn--primary" onClick={onDownload}>
-              Download Kokoro
-            </button>
-          )}
           {isActive && (
             <ProgressBar progress={progress.progress} message={progress.message} />
           )}
           {progress.status === "error" && (
-            <p className="setup-error">{progress.error}</p>
+            <>
+              <p className="setup-error">{progress.error}</p>
+              <button className="btn btn--primary" onClick={onDownload}>
+                Retry download
+              </button>
+            </>
+          )}
+          {!isReady && !isActive && progress.status !== "error" && (
+            <button className="btn btn--ghost btn--sm" onClick={onDownload}>
+              Download manually
+            </button>
           )}
         </div>
       ) : (
