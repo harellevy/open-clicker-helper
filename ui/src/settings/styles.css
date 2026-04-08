@@ -496,3 +496,55 @@ kbd {
 @media (prefers-color-scheme: dark) {
   kbd { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
 }
+
+/* ── Reset page ───────────────────────────────────────────────────────────── */
+
+.btn--danger {
+  background: #ff3b30;
+  color: #fff;
+}
+.btn--danger:hover:not(:disabled) { background: #e0352b; }
+
+.reset-section {
+  margin-bottom: 28px;
+}
+.reset-section h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.reset-section p {
+  margin: 0 0 10px;
+  color: #636366;
+}
+
+.reset-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.reset-confirm__msg {
+  margin: 0;
+  font-weight: 500;
+}
+.reset-confirm__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.reset-code {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: "SF Mono", "Menlo", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn--danger:hover:not(:disabled) { background: #ff453a; }
+  .reset-section p { color: #8e8e93; }
+  .reset-code { background: rgba(255,255,255,0.06); }
+}

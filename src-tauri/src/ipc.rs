@@ -95,6 +95,22 @@ pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> AppResult<()>
     Ok(())
 }
 
+/// Delete the settings store entirely and return the factory defaults.
+/// The next `get_settings` call will return defaults; the setup wizard
+/// will re-appear on next launch.
+#[tauri::command]
+pub fn reset_settings(app: tauri::AppHandle) -> AppResult<Settings> {
+    use tauri_plugin_store::StoreExt;
+    let store = app
+        .store(STORE_FILE)
+        .map_err(|e| AppError::Sidecar(format!("store open: {e}")))?;
+    store.delete(SETTINGS_KEY);
+    store
+        .save()
+        .map_err(|e| AppError::Sidecar(format!("store save: {e}")))?;
+    Ok(Settings::default())
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Sidecar bridge
 // ──────────────────────────────────────────────────────────────────────────────
