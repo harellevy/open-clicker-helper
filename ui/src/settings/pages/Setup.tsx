@@ -438,7 +438,7 @@ function VlmStep({
     <div className="setup-section">
       <p className="setup-desc">
         The vision LLM looks at a screenshot and figures out where to click.
-        Ollama (offline) uses Qwen2.5-VL locally — needs ~5 GB free disk. Cloud
+        Ollama (offline) uses qwen2.5vl:7b locally — needs ~5 GB free disk. Cloud
         providers (OpenAI, Anthropic) work without a GPU but send your screen to
         the internet.
       </p>

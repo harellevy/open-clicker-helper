@@ -21,6 +21,9 @@ mlx = [
 ]
 faster-whisper = ["faster-whisper>=1.0"]
 kokoro = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
+# Cloud provider SDKs — install whichever you need.
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.40"]
 
 # PEP 735 dependency groups. `uv sync` installs the `dev` group by default,
 # so CI doesn't need any extra flags to get pytest.

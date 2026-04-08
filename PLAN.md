@@ -177,11 +177,19 @@ UI for re-configuring everything.
 *Sidecar:* `setup.py` with check/download helpers (generators for streaming);
 `handlers.py` registers all `setup.*` and `providers.test` methods.
 
-**P3 — voice round-trip (no vision yet)**
+**P3 — voice round-trip (no vision yet)** ✅
 - `audio.rs` records mic to in-memory WAV via `cpal`; `record_audio` Tauri command.
 - Implement `stt_mlx_whisper.py` and `tts_kokoro.py` providers.
 - `pipeline.run` (text-only mode): audio → STT → LLM text answer → TTS → play.
 - HUD shows transcript bubble. Confirms full hotkey → audio → response loop works.
+
+**P3.1 — cloud provider dispatch** ✅
+- `stt_openai.py`: OpenAI Whisper API.
+- `vlm_openai.py`: OpenAI GPT-4o vision.
+- `vlm_anthropic.py`: Anthropic Claude vision.
+- `tts_openai.py`: OpenAI TTS (PCM→WAV wrapper).
+- `pipeline.py` factory functions dispatch on `settings.{stt,vlm,tts}.provider`.
+- `pyproject.toml` adds `[openai]` and `[anthropic]` optional dependency groups.
 
 **P4 — vision grounding (the core feature)** ✅
 - `platform/macos/capture.rs`: screenshot via `screencapture -x` CLI (no extra deps); future P4.1 replaces with `scap` for per-window capture.
@@ -191,22 +199,35 @@ UI for re-configuring everything.
 - `animator.ts`: `spring()`, `easeInOut()`, `lerp()`, `bezierPath()`, `animate()` helpers.
 - `capture_screen` IPC command exposed to frontend.
 
-**P4.1 — iterative multi-step grounding** *(planned)*
+**P4.1 — iterative multi-step grounding** ✅
 
 Real UI flows require re-grounding after each user action, not a single up-front batch:
 
-1. Ground step 1 against initial screenshot → animate cursor → **click** (via `cliclick` or Accessibility API).
+1. Ground step 1 against initial screenshot → animate cursor → **click** (CGEvent).
 2. Wait for UI to settle (configurable delay, default 800 ms).
 3. Capture a **fresh screenshot** of the updated UI.
 4. Re-ground step 2 against the new screenshot → animate → click.
-5. Repeat until all steps complete or an error occurs.
+5. Repeat until all steps complete or `MAX_STEPS` (8) reached.
 
-This requires:
-- `platform/macos/mouse.rs`: synthesise a click at normalised coordinates using `CGEvent`.
-- New `pipeline.step` RPC method (streaming) that yields `(screenshot_b64, step)` one at a time.
-- Rust coordinates the loop: receives each step, clicks, captures, sends next screenshot.
-- `Annotation.tsx` stays per-step (already correct architecture).
-- Settings: "step delay" slider (0–2 s); "max steps" cap (default 8).
+Implemented in `Annotation.tsx` (`runIterative` loop) + `grounding.locate` RPC + `click_at_normalized` + `capture_screen`.
+
+**P4.2 — AX-tree fast path** *(planned)*
+
+macOS Accessibility API can locate standard UI elements (buttons, text fields, menus)
+faster and more reliably than VLM grounding for native apps — no GPU, no network,
+sub-millisecond latency. Vision falls back to VLM only when the AX tree has no match.
+
+Strategy:
+1. `platform/macos/ax.rs`: query the focused app's AX tree with `objc2` (`AXUIElement`).
+   Walk children, match by `AXRole` + `AXTitle`/`AXDescription` against the question keywords.
+   Return normalised `{x, y}` of the matched element's frame midpoint.
+2. `grounding.py` gains a `mode: "auto" | "ax" | "vlm"` dispatch:
+   - `"auto"` (default): try AX first; if confidence < threshold or no match, fall back to VLM.
+   - `"ax"`: AX only (fast, native apps only).
+   - `"vlm"`: VLM only (games, web content, non-native UIs).
+3. New `ax_locate` IPC command mirrors `capture_screen` — returns match or `null`.
+4. Settings: "Grounding mode" selector (auto / AX / VLM).
+5. `Annotation.tsx` unchanged — it receives the same `{steps}` regardless of backend.
 
 **P5 — first-run model wizard**
 - `Models.tsx` checks for `~/Library/Application Support/` Ollama models + mlx-whisper cache.

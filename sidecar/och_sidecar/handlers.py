@@ -36,7 +36,7 @@ def _setup_check(params: dict[str, Any]) -> dict[str, Any]:
             model=params.get("stt_model", "mlx-community/whisper-base-mlx")
         ),
         "vlm": _setup.check_vlm(
-            model=params.get("vlm_model", "qwen2.5-vl:7b"),
+            model=params.get("vlm_model", "qwen2.5vl:7b"),
             base_url=params.get("ollama_url", "http://localhost:11434"),
         ),
         "tts": _setup.check_tts(
@@ -53,7 +53,7 @@ def _setup_check_stt(params: dict[str, Any]) -> dict[str, Any]:
 
 def _setup_check_vlm(params: dict[str, Any]) -> dict[str, Any]:
     return _setup.check_vlm(
-        model=params.get("model", "qwen2.5-vl:7b"),
+        model=params.get("model", "qwen2.5vl:7b"),
         base_url=params.get("base_url", "http://localhost:11434"),
     )
 
@@ -72,7 +72,7 @@ def _setup_download_stt(params: dict[str, Any]):
 def _setup_download_vlm(params: dict[str, Any]):
     """Streaming — yields (event, payload) progress tuples."""
     return _setup.download_vlm(
-        model=params.get("model", "qwen2.5-vl:7b"),
+        model=params.get("model", "qwen2.5vl:7b"),
         base_url=params.get("base_url", "http://localhost:11434"),
     )
 

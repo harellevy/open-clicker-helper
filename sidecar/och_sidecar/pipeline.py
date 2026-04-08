@@ -112,26 +112,56 @@ def run(
 # ── Provider factories ────────────────────────────────────────────────────────
 
 def _make_stt(settings: dict[str, Any]):
-    from .providers.stt_mlx_whisper import MlxWhisperConfig, MlxWhisperStt
-
     stt_cfg = settings.get("stt", {})
+    provider = stt_cfg.get("provider", "mlx-whisper")
+
+    if provider == "openai":
+        from .providers.stt_openai import OpenAIStt, OpenAISttConfig
+        return OpenAIStt(OpenAISttConfig(openai_key=stt_cfg.get("openai_key") or ""))
+
+    # default: mlx-whisper
+    from .providers.stt_mlx_whisper import MlxWhisperConfig, MlxWhisperStt
     model = stt_cfg.get("mlx_model", "mlx-community/whisper-base-mlx")
     return MlxWhisperStt(MlxWhisperConfig(mlx_model=model))
 
 
 def _make_vlm(settings: dict[str, Any]):
-    from .providers.vlm_ollama import OllamaConfig, OllamaVlm
-
     vlm_cfg = settings.get("vlm", {})
-    model = vlm_cfg.get("ollama_model", "qwen2.5-vl:7b")
+    provider = vlm_cfg.get("provider", "ollama")
+
+    if provider == "openai":
+        from .providers.vlm_openai import OpenAIVlm, OpenAIVlmConfig
+        return OpenAIVlm(OpenAIVlmConfig(
+            openai_key=vlm_cfg.get("openai_key") or "",
+            openai_model=vlm_cfg.get("openai_model", "gpt-4o"),
+        ))
+
+    if provider == "anthropic":
+        from .providers.vlm_anthropic import AnthropicVlm, AnthropicVlmConfig
+        return AnthropicVlm(AnthropicVlmConfig(
+            anthropic_key=vlm_cfg.get("anthropic_key") or "",
+        ))
+
+    # default: ollama
+    from .providers.vlm_ollama import OllamaConfig, OllamaVlm
+    model = vlm_cfg.get("ollama_model", "qwen2.5vl:7b")
     url = vlm_cfg.get("ollama_url", "http://localhost:11434")
     return OllamaVlm(OllamaConfig(ollama_model=model, ollama_url=url))
 
 
 def _make_tts(settings: dict[str, Any]):
-    from .providers.tts_kokoro import KokoroConfig, KokoroTts
-
     tts_cfg = settings.get("tts", {})
+    provider = tts_cfg.get("provider", "kokoro")
+
+    if provider == "openai":
+        from .providers.tts_openai import OpenAITts, OpenAITtsConfig
+        return OpenAITts(OpenAITtsConfig(
+            openai_key=tts_cfg.get("openai_key") or "",
+            voice=tts_cfg.get("openai_voice", "nova"),
+        ))
+
+    # default: kokoro
+    from .providers.tts_kokoro import KokoroConfig, KokoroTts
     voice = tts_cfg.get("kokoro_voice", "af_heart")
     speed = float(tts_cfg.get("kokoro_speed", 1.0))
     return KokoroTts(KokoroConfig(kokoro_voice=voice, kokoro_speed=speed))

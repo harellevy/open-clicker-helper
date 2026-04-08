@@ -77,7 +77,7 @@ def download_stt(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def check_vlm(
-    model: str = "qwen2.5-vl:7b",
+    model: str = "qwen2.5vl:7b",
     base_url: str = "http://localhost:11434",
 ) -> dict[str, Any]:
     """Return Ollama availability + whether the model is already pulled."""
@@ -105,7 +105,7 @@ def check_vlm(
 
 
 def download_vlm(
-    model: str = "qwen2.5-vl:7b",
+    model: str = "qwen2.5vl:7b",
     base_url: str = "http://localhost:11434",
 ) -> Iterator[tuple[str, Any]]:
     """Pull a model via the Ollama streaming API, yielding progress events."""
