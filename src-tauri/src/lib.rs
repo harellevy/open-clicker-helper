@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use serde::Serialize;
+use tauri::utils::config::Color;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
@@ -78,17 +79,23 @@ pub fn run() {
         .setup(|app| {
             // Configure the transparent overlay window with native macOS flags.
             if let Some(overlay) = app.get_webview_window("overlay") {
-                // Resize overlay to cover the primary monitor exactly.
+                // Explicitly clear the WebView background so it doesn't
+                // default to white even when `transparent: true` is set.
+                let _ = overlay.set_background_color(Some(Color(0, 0, 0, 0)));
+
+                // DEBUG: bottom-half only so the screen is still usable.
+                // TODO(P5): restore full-screen once click-through is stable.
                 if let Some(monitor) = overlay.primary_monitor().ok().flatten() {
                     let size = monitor.size();
+                    let half_h = size.height / 2;
                     let _ = overlay.set_size(tauri::Size::Physical(tauri::PhysicalSize {
                         width: size.width,
-                        height: size.height,
+                        height: half_h,
                     }));
                     let _ =
                         overlay.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
                             x: 0,
-                            y: 0,
+                            y: half_h as i32,
                         }));
                 }
 
