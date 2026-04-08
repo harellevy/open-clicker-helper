@@ -71,6 +71,7 @@ pub fn run() {
             ipc::open_system_settings,
             ipc::get_settings,
             ipc::save_settings,
+            ipc::reset_settings,
             ipc::ping_sidecar,
             ipc::sidecar_call,
             ipc::capture_screen,

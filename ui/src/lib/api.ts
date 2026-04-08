@@ -142,6 +142,7 @@ export const api = {
   // Settings store
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  resetSettings: () => invoke<Settings>("reset_settings"),
 
   // Sidecar
   pingSidecar: () => invoke<SidecarHealth>("ping_sidecar"),
