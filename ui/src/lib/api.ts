@@ -205,3 +205,51 @@ export function onSidecarProgress(
 ): Promise<() => void> {
   return listen<SidecarProgress>("sidecar://progress", (ev) => cb(ev.payload));
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// P3: Push-to-talk hotkey state + pipeline result
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** State emitted by the Rust hotkey handler on every transition. */
+export type HotkeyState =
+  | { state: "idle" }
+  | { state: "recording" }
+  | { state: "processing" }
+  | { state: "error"; message: string };
+
+/** Final result emitted when the pipeline completes successfully. */
+export interface PipelineResult {
+  transcript: string;
+  answer: string;
+  /** Base64-encoded WAV bytes of the TTS response. */
+  audio_b64: string;
+}
+
+/** Listen for push-to-talk state transitions from the Rust shell. */
+export function onHotkeyState(cb: (s: HotkeyState) => void): Promise<() => void> {
+  return listen<HotkeyState>("hotkey-state", (ev) => cb(ev.payload));
+}
+
+/** Listen for pipeline completion events. */
+export function onPipelineResult(cb: (r: PipelineResult) => void): Promise<() => void> {
+  return listen<PipelineResult>("pipeline-result", (ev) => cb(ev.payload));
+}
+
+/** Play a base64-encoded WAV file using the Web Audio API. */
+export async function playAudioB64(b64: string): Promise<void> {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const ctx = new AudioContext();
+  const buffer = await ctx.decodeAudioData(bytes.buffer);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  src.start();
+  return new Promise((resolve) => {
+    src.onended = () => {
+      void ctx.close();
+      resolve();
+    };
+  });
+}
