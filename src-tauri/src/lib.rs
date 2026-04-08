@@ -72,6 +72,7 @@ pub fn run() {
             ipc::save_settings,
             ipc::ping_sidecar,
             ipc::sidecar_call,
+            ipc::capture_screen,
         ])
         .setup(|app| {
             // Configure the transparent overlay window with native macOS flags.
@@ -227,6 +228,27 @@ async fn on_release(app: &tauri::AppHandle) {
 
     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
 
+    // Capture a screenshot concurrently with the audio encode.  We do it in
+    // spawn_blocking because screencapture spawns a child process.
+    let image_b64: Option<String> = match tokio::task::spawn_blocking(move || {
+        platform::current().capture().capture_focused_window()
+    })
+    .await
+    {
+        Ok(Ok(png)) => {
+            tracing::info!("captured screenshot ({} bytes)", png.len());
+            Some(base64::engine::general_purpose::STANDARD.encode(&png))
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("screenshot failed (continuing without image): {e}");
+            None
+        }
+        Err(e) => {
+            tracing::warn!("spawn_blocking for screenshot: {e}");
+            None
+        }
+    };
+
     // Call the sidecar pipeline.
     let sidecar = state.sidecar.lock().await.clone();
     let Some(sidecar) = sidecar else {
@@ -245,7 +267,7 @@ async fn on_release(app: &tauri::AppHandle) {
             "pipeline.run",
             serde_json::json!({
                 "audio_b64": audio_b64,
-                "image_b64": null,
+                "image_b64": image_b64,
                 "settings": settings_val,
             }),
         )

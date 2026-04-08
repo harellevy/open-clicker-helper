@@ -93,7 +93,7 @@ class TestPipelineEventOrder:
     def test_final_result_has_expected_keys(self):
         audio_b64 = _b64(_fake_wav())
         events, final, *_ = self._run(audio_b64)
-        assert set(final.keys()) == {"transcript", "answer", "audio_b64"}
+        assert set(final.keys()) == {"transcript", "answer", "audio_b64", "steps"}
 
     def test_final_result_values(self):
         audio_b64 = _b64(_fake_wav())
@@ -133,14 +133,33 @@ class TestPipelineProviderCalls:
     def test_vlm_receives_transcript_and_no_image_when_image_b64_is_none(self):
         audio_b64 = _b64(_fake_wav())
         _, mock_vlm, _ = self._run_with_mocks(audio_b64, image_b64=None)
-        mock_vlm.complete.assert_called_once_with("transcribed text", None)
+        mock_vlm.complete.assert_called_once_with("transcribed text", image_bytes=None)
 
-    def test_vlm_receives_decoded_image_bytes_when_provided(self):
+    def test_grounding_called_with_decoded_image_when_image_b64_provided(self):
+        """When image_b64 is present the pipeline delegates to grounding.locate."""
+        from och_sidecar import grounding as _grounding
+
         audio_b64 = _b64(_fake_wav())
         raw_img = b"\x89PNG\r\n\x1a\n"
         image_b64 = _b64(raw_img)
-        _, mock_vlm, _ = self._run_with_mocks(audio_b64, image_b64=image_b64)
-        mock_vlm.complete.assert_called_once_with("transcribed text", raw_img)
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "transcribed text"
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+        fake_steps = [{"x": 0.5, "y": 0.3, "explanation": "Click the button"}]
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+            patch.object(_grounding, "locate", return_value={"steps": fake_steps}) as mock_locate,
+        ):
+            events_list, final = _collect(_pipeline.run(audio_b64, image_b64, {}))
+
+        # grounding.locate must receive the decoded PNG bytes and the transcript
+        mock_locate.assert_called_once_with(mock_vlm, raw_img, "transcribed text")
+        assert final["steps"] == fake_steps
 
     def test_tts_receives_vlm_answer(self):
         audio_b64 = _b64(_fake_wav())
