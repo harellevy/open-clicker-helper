@@ -78,7 +78,9 @@ impl OverlayWindow for MacOverlay {
                 let count: usize = msg_send![subviews, count];
                 for i in 0..count {
                     let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
-                    if subview.is_null() { continue; }
+                    if subview.is_null() {
+                        continue;
+                    }
                     let sel = objc2::runtime::Sel::register("setDrawsBackground:");
                     let responds: bool = msg_send![subview, respondsToSelector: sel];
                     if responds {
