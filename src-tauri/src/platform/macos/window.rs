@@ -66,13 +66,30 @@ impl OverlayWindow for MacOverlay {
             let _: () = msg_send![ns_window, setHidesOnDeactivate: false];
 
             // True transparency: WKWebView paints its own white background
-            // independently of the NSWindow transparency setting. Disable it.
+            // independently of the NSWindow transparency setting.
             let _: () = msg_send![ns_window, setOpaque: false];
+
+            // wry wraps the real WKWebView inside a WryWebViewParent container.
+            // contentView returns that parent; we need to walk one level into its
+            // subviews to reach the actual WKWebView, which has drawsBackground.
+            // Guard with respondsToSelector: so a wry refactor won't crash us.
             let content_view: *mut AnyObject = msg_send![ns_window, contentView];
             if !content_view.is_null() {
-                // setDrawsBackground:NO — the WKWebView-specific call that
-                // prevents the white fill. transparent:true alone is not enough.
-                let _: () = msg_send![content_view, setDrawsBackground: false];
+                let subviews: *mut AnyObject = msg_send![content_view, subviews];
+                let count: usize = msg_send![subviews, count];
+                for i in 0..count {
+                    let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                    if subview.is_null() {
+                        continue;
+                    }
+                    // Only send setDrawsBackground: if the view actually supports it.
+                    let sel = objc2::runtime::Sel::register("setDrawsBackground:");
+                    let responds: bool = msg_send![subview, respondsToSelector: sel];
+                    if responds {
+                        let _: () = msg_send![subview, setDrawsBackground: false];
+                        break;
+                    }
+                }
             }
         }
 
