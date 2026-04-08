@@ -100,9 +100,9 @@ impl VadState {
     /// elapsed call, one atomic store, and (only on the first voiced chunk)
     /// one CAS.
     fn observe(&self, rms: f32, threshold: f32) {
-        if !(rms > threshold) {
-            // `>` (not `>=`) so an explicit threshold of 0 still ignores
-            // truly-silent frames; `!` form so NaN is treated as silence.
+        // NaN counts as silence — any comparison against NaN is false, and
+        // we don't want a garbage frame to accidentally start the clock.
+        if rms.is_nan() || rms <= threshold {
             return;
         }
         let now_ms = self.start.elapsed().as_millis() as u64;
