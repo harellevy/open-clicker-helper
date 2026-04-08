@@ -147,7 +147,7 @@ def _grounding_locate(params: dict[str, Any]) -> dict[str, Any]:
 
     image_bytes = base64.b64decode(params["image_b64"])
     question = params["question"]
-    settings = params.get("settings", {})
+    settings = params.get("settings") or {}
 
     vlm = _make_vlm(settings)
     return _grounding.locate(vlm, image_bytes, question)
