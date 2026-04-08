@@ -155,3 +155,57 @@ impl Default for TtsSettings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_default_values() {
+        let s = Settings::default();
+        assert!(!s.setup_complete);
+        assert_eq!(s.hotkey, "CommandOrControl+Shift+Space");
+        assert_eq!(s.stt.provider, "mlx-whisper");
+        assert_eq!(s.stt.mlx_model, "mlx-community/whisper-base-mlx");
+        assert_eq!(s.vlm.provider, "ollama");
+        assert_eq!(s.vlm.ollama_model, "qwen2.5-vl:7b");
+        assert_eq!(s.vlm.ollama_url, "http://localhost:11434");
+        assert_eq!(s.tts.provider, "kokoro");
+        assert_eq!(s.tts.kokoro_voice, "af_heart");
+    }
+
+    #[test]
+    fn settings_roundtrip_serde() {
+        let s = Settings::default();
+        let json = serde_json::to_string(&s).unwrap();
+        let s2: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(s.hotkey, s2.hotkey);
+        assert_eq!(s.setup_complete, s2.setup_complete);
+        assert_eq!(s.stt.provider, s2.stt.provider);
+        assert_eq!(s.vlm.ollama_url, s2.vlm.ollama_url);
+        assert_eq!(s.tts.kokoro_voice, s2.tts.kokoro_voice);
+    }
+
+    #[test]
+    fn settings_missing_fields_use_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"hotkey":"Ctrl+Alt+X"}"#).unwrap();
+        assert_eq!(s.hotkey, "Ctrl+Alt+X");
+        assert!(!s.setup_complete);
+        assert_eq!(s.stt.provider, "mlx-whisper");
+        assert_eq!(s.tts.provider, "kokoro");
+    }
+
+    #[test]
+    fn empty_object_deserializes_to_defaults() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.hotkey, "CommandOrControl+Shift+Space");
+        assert!(!s.setup_complete);
+    }
+
+    #[test]
+    fn setup_complete_roundtrips() {
+        let json = r#"{"setup_complete":true}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(s.setup_complete);
+    }
+}
