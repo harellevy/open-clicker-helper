@@ -50,6 +50,14 @@ export interface SystemPromptsSettings {
   caption: string;
 }
 
+export interface GroundingSettings {
+  /**
+   * When true, run a second VLM pass on a full-resolution crop around each
+   * rough target to tighten pixel accuracy. Adds one VLM call per step.
+   */
+  refine: boolean;
+}
+
 export interface Settings {
   setup_complete: boolean;
   hotkey: string;
@@ -58,6 +66,7 @@ export interface Settings {
   tts: TtsSettings;
   debug: DebugSettings;
   system_prompts: SystemPromptsSettings;
+  grounding: GroundingSettings;
 }
 
 export function defaultSettings(): Settings {
@@ -85,6 +94,7 @@ export function defaultSettings(): Settings {
     },
     debug: { enabled: false },
     system_prompts: { grounding: "", caption: "" },
+    grounding: { refine: true },
   };
 }
 
@@ -239,6 +249,7 @@ export interface PipelineTimings {
   downscale_ms?: number;
   caption_ms?: number;
   grounding_ms?: number;
+  refine_ms?: number;
   llm_ms?: number;
   tts_ms?: number;
   total_ms?: number;
@@ -271,6 +282,12 @@ export interface PipelineResult {
   timings?: PipelineTimings;
   /** Present only when debug mode is enabled in settings. */
   debug?: PipelineDebug;
+  /**
+   * Non-empty when the pipeline short-circuited without running the full
+   * stages. Currently only "empty_transcript" — the STT produced no speech
+   * so the VLM/TTS were skipped.
+   */
+  cancelled?: string;
 }
 
 /** Progress notification from the sidecar relay (pipeline stage updates). */
@@ -302,6 +319,8 @@ const PIPELINE_EVENTS = new Set([
   "caption_done",
   "grounding_start",
   "grounding_done",
+  "refine_start",
+  "refine_done",
   "llm_start",
   "llm_done",
   "tts_start",

@@ -164,18 +164,15 @@ fn register_hotkey(app: &mut tauri::App) {
         accelerator.as_str(),
         |app, _shortcut, event| {
             use tauri_plugin_global_shortcut::ShortcutState;
-            let handle = app.clone();
-            match event.state {
-                ShortcutState::Pressed => {
-                    tauri::async_runtime::spawn(async move {
-                        on_press(&handle).await;
-                    });
-                }
-                ShortcutState::Released => {
-                    tauri::async_runtime::spawn(async move {
-                        on_release(&handle).await;
-                    });
-                }
+            // Press-to-toggle + VAD auto-stop: one press starts the
+            // recording, a second press (or silence) ends it.  Key-up is
+            // intentionally ignored so the user doesn't have to hold the
+            // shortcut while speaking a long question.
+            if matches!(event.state, ShortcutState::Pressed) {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    on_press(&handle).await;
+                });
             }
         },
     );
@@ -186,17 +183,34 @@ fn register_hotkey(app: &mut tauri::App) {
     }
 }
 
+/// Press handler: toggle the recorder.  First press starts capture; a
+/// second press before VAD silence fires acts as an explicit stop.  After
+/// starting a fresh recording we spawn a background task that waits for
+/// it to complete (either naturally or via stop_now) and then runs the
+/// pipeline.
 async fn on_press(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let mut rec = state.recorder.lock().await;
-    if rec.is_some() {
-        return; // already recording
+    let mut rec_slot = state.recorder.lock().await;
+
+    if let Some(existing) = rec_slot.as_ref() {
+        // Already recording → treat this press as "I'm done talking".
+        existing.stop_now();
+        tracing::debug!("second press → explicit stop");
+        return;
     }
-    match audio::AudioRecorder::start() {
+
+    match audio::AudioRecorder::start(audio::VadConfig::default()) {
         Ok(recorder) => {
-            *rec = Some(recorder);
+            *rec_slot = Some(recorder);
+            drop(rec_slot);
             let _ = app.emit("hotkey-state", HotkeyState::Recording);
             tracing::debug!("recording started");
+
+            // Waiter: block on the recording thread, then run the pipeline.
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                process_recording(&handle).await;
+            });
         }
         Err(e) => {
             tracing::error!("start recording: {e}");
@@ -210,18 +224,21 @@ async fn on_press(app: &tauri::AppHandle) {
     }
 }
 
-async fn on_release(app: &tauri::AppHandle) {
+/// Waiter task: blocks until the active recorder finishes, then either
+/// drops the result (no speech) or runs the full pipeline.
+async fn process_recording(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let recorder = state.recorder.lock().await.take();
-    let Some(recorder) = recorder else { return };
+    let recorder = match state.recorder.lock().await.take() {
+        Some(r) => r,
+        None => return,
+    };
 
-    let _ = app.emit("hotkey-state", HotkeyState::Processing);
-
-    // Encode WAV in a blocking task (stop_and_encode calls mpsc::recv).
-    let wav_bytes = match tokio::task::spawn_blocking(move || recorder.stop_and_encode()).await {
-        Ok(Ok(b)) => b,
+    // wait_for_completion is blocking (mpsc::recv) — hop off the async runtime.
+    let recording = match tokio::task::spawn_blocking(move || recorder.wait_for_completion()).await
+    {
+        Ok(Ok(r)) => r,
         Ok(Err(e)) => {
-            tracing::error!("encode audio: {e}");
+            tracing::error!("wait_for_completion: {e}");
             let _ = app.emit(
                 "hotkey-state",
                 HotkeyState::Error {
@@ -242,6 +259,23 @@ async fn on_release(app: &tauri::AppHandle) {
         }
     };
 
+    tracing::info!(
+        "recording ended: reason={:?} duration_ms={} bytes={}",
+        recording.reason,
+        recording.duration_ms,
+        recording.wav.len()
+    );
+
+    // User never spoke — skip STT/VLM/TTS entirely and return to idle.
+    if matches!(recording.reason, audio::StopReason::NoVoice) {
+        tracing::info!("no voice detected — cancelling pipeline");
+        let _ = app.emit("hotkey-state", HotkeyState::Idle);
+        return;
+    }
+
+    let _ = app.emit("hotkey-state", HotkeyState::Processing);
+
+    let wav_bytes = recording.wav;
     tracing::info!("recorded {} bytes of audio", wav_bytes.len());
 
     // Load settings to pass to the pipeline.

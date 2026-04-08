@@ -57,6 +57,22 @@ Focus on:
 IMPORTANT: Respond in English only — the downstream text-to-speech engine does not support other languages.
 Respond with plain prose — no JSON, no lists, no code fences."""
 
+DEFAULT_REFINE_SYSTEM_PROMPT = """You are a UI grounding refinement assistant. The image you are looking at is a ZOOMED-IN CROP of a larger screenshot — a small region where the target element is known to live.
+
+Your job: pinpoint the EXACT CENTER of the element the user wants to click, within THIS cropped image.
+
+IMPORTANT: Respond ONLY with a valid JSON object — no prose, no markdown fences.
+IMPORTANT: The "explanation" field MUST be written in English (downstream TTS is English-only).
+
+Schema:
+{
+  "x": <float 0.0–1.0>,
+  "y": <float 0.0–1.0>,
+  "explanation": "<one short sentence, English only>"
+}
+
+Coordinates are normalised within THIS crop (not the full screen). (0, 0) is the top-left of the crop; (1, 1) is the bottom-right. Aim for the geometric centre of the clickable region, not its edge. If multiple candidates are visible, pick the one that best matches the task."""
+
 _RETRY_SUFFIX = "\n\nRespond ONLY with the JSON object. No explanation, no code fences."
 
 
@@ -82,6 +98,17 @@ GROUNDING_JSON_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["steps"],
+}
+
+# Schema for the single-point refinement response.
+REFINE_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1},
+        "explanation": {"type": "string"},
+    },
+    "required": ["x", "y", "explanation"],
 }
 
 
@@ -158,6 +185,80 @@ def caption(
     """
     prompt = (system_prompt or DEFAULT_CAPTION_SYSTEM_PROMPT).rstrip()
     return vlm.complete(prompt, image_bytes=image_png).strip()
+
+
+def refine(
+    vlm: VlmProvider,
+    crop_png: bytes,
+    question: str,
+    *,
+    system_prompt: str | None = None,
+) -> dict[str, Any] | None:
+    """Refinement pass: ask the VLM for a precise point inside a cropped region.
+
+    The caller is expected to have cropped a window from the **full-resolution**
+    screenshot centred on a rough coordinate from the first grounding call.
+    This function asks the VLM to pinpoint the exact target centre within
+    that crop. The returned coordinates are normalised within the crop —
+    callers are responsible for mapping them back to full-image space.
+
+    Returns ``{"x": float, "y": float, "explanation": str}`` on success, or
+    ``None`` on any failure (VLM error, parse error). When ``None`` is
+    returned the caller should fall back to the rough first-pass coordinate
+    rather than fail the whole request.
+    """
+    base = (system_prompt or DEFAULT_REFINE_SYSTEM_PROMPT).rstrip()
+    prompt = f"{base}\n\nTask: {question}"
+
+    try:
+        raw = vlm.complete(
+            prompt,
+            image_bytes=crop_png,
+            json_schema=REFINE_JSON_SCHEMA,
+        )
+    except Exception as exc:  # noqa: BLE001 — refine is best-effort
+        logger.warning("refine VLM call failed: %s", exc)
+        return None
+
+    try:
+        return _parse_single_point(raw)
+    except ValueError as exc:
+        logger.warning("refine parse failed: %s | raw=%r", exc, raw[:200])
+        return None
+
+
+def _parse_single_point(text: str) -> dict[str, Any]:
+    """Parse a single ``{x, y, explanation}`` JSON object. Clamps to [0, 1].
+
+    Raises ``ValueError`` on any schema violation.
+    """
+    text = re.sub(r"```(?:json)?\s*", "", text).strip()
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"no JSON object found in: {text[:200]!r}")
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON parse error: {exc}") from exc
+
+    # Some models return {"steps": [{...}]} even with the single-point prompt.
+    # Accept that shape too by unwrapping the first step.
+    if isinstance(data.get("steps"), list) and data["steps"]:
+        first = data["steps"][0]
+        if isinstance(first, dict):
+            data = first
+
+    try:
+        x = float(data.get("x", data.get("x_norm", data.get("left", 0))))
+        y = float(data.get("y", data.get("y_norm", data.get("top", 0))))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"non-numeric x/y: {data!r}") from exc
+
+    return {
+        "x": max(0.0, min(1.0, x)),
+        "y": max(0.0, min(1.0, y)),
+        "explanation": str(data.get("explanation", data.get("label", ""))),
+    }
 
 
 # ── Parsing / validation ──────────────────────────────────────────────────────

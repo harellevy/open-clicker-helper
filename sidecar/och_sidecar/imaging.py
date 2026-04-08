@@ -70,3 +70,81 @@ def downscale_png(png_bytes: bytes) -> tuple[bytes, tuple[int, int], tuple[int, 
     except Exception as exc:  # noqa: BLE001
         logger.warning("screenshot downscale failed, using original: %s", exc)
         return png_bytes, (0, 0), (0, 0)
+
+
+# Crop sizing for the refinement pass. The long edge of the crop is a
+# fraction of the original screenshot's long edge, clamped so (a) tiny
+# screens still get a usable crop, (b) huge screens don't blow past the
+# VLM's practical image budget.
+REFINE_CROP_FRAC = 0.22
+REFINE_CROP_MIN_PX = 384
+REFINE_CROP_MAX_PX = 960
+
+
+def crop_around(
+    png_bytes: bytes,
+    norm_x: float,
+    norm_y: float,
+    *,
+    crop_frac: float = REFINE_CROP_FRAC,
+    min_size: int = REFINE_CROP_MIN_PX,
+    max_size: int = REFINE_CROP_MAX_PX,
+) -> tuple[bytes, tuple[float, float, float, float]] | None:
+    """Crop a square window around a normalized point on a full-res screenshot.
+
+    Used by the grounding refinement pass. Given a rough normalized target
+    from the first (downscaled) grounding call, we crop the corresponding
+    region from the **original** full-resolution image and hand that to the
+    VLM for precise pixel-level targeting. A 1-px error in a 500×500 crop
+    maps back to 1 px in the original — dramatically better than a 1-px
+    error in the 8×-downscaled first pass (~2.8 px in the original).
+
+    Returns ``(crop_png_bytes, (x0, y0, w, h))`` where ``(x0, y0, w, h)`` is
+    the crop rectangle in **normalized** original-image coordinates (0–1),
+    so callers can map refined coordinates back to the full image via
+    ``full_x = x0 + refined_x * w``.
+
+    Returns ``None`` on any decode/encode failure — the caller should fall
+    back to the rough coordinate.
+    """
+    try:
+        from PIL import Image  # type: ignore[import]
+    except ImportError:
+        logger.warning("Pillow not installed; skipping crop_around")
+        return None
+
+    try:
+        with Image.open(io.BytesIO(png_bytes)) as im:
+            im.load()
+            w, h = im.size
+            if w <= 0 or h <= 0:
+                return None
+
+            # Crop side length: crop_frac of the long edge, clamped, and
+            # capped at the image's shortest side (we can't crop larger
+            # than the source).
+            side = int(round(max(w, h) * crop_frac))
+            side = max(min_size, min(side, max_size))
+            side = min(side, w, h)
+            if side <= 0:
+                return None
+
+            cx = int(round(max(0.0, min(1.0, norm_x)) * w))
+            cy = int(round(max(0.0, min(1.0, norm_y)) * h))
+            half = side // 2
+            x0 = max(0, min(cx - half, w - side))
+            y0 = max(0, min(cy - half, h - side))
+
+            crop = im.crop((x0, y0, x0 + side, y0 + side))
+            if crop.mode not in ("RGB", "L"):
+                crop = crop.convert("RGB")
+
+            out = io.BytesIO()
+            crop.save(out, format="PNG", optimize=True)
+            return (
+                out.getvalue(),
+                (x0 / w, y0 / h, side / w, side / h),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("crop_around failed, using rough coordinate: %s", exc)
+        return None
