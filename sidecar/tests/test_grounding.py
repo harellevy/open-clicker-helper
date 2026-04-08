@@ -143,3 +143,26 @@ class TestLocate:
         first_prompt = vlm.complete.call_args_list[0].args[0]
         second_prompt = vlm.complete.call_args_list[1].args[0]
         assert len(second_prompt) > len(first_prompt)
+
+    def test_locate_forwards_grounding_schema_to_provider(self):
+        """locate() must pass GROUNDING_JSON_SCHEMA to vlm.complete so
+        providers that support structured outputs (Ollama `format`, OpenAI
+        `response_format.json_schema`) can constrain decoding."""
+        vlm = self._make_vlm('{"steps": [{"x": 0.5, "y": 0.5, "explanation": "ok"}]}')
+        _grounding.locate(vlm, b"png", "task")
+        call_kwargs = vlm.complete.call_args_list[0].kwargs
+        assert call_kwargs.get("json_schema") is _grounding.GROUNDING_JSON_SCHEMA
+
+    def test_locate_forwards_schema_on_retry_as_well(self):
+        """The retry path must also carry the schema — a provider that
+        supports structured outputs should benefit from it on both attempts."""
+        vlm = self._make_vlm("bad")
+        vlm.complete.side_effect = [
+            "bad",
+            '{"steps": [{"x": 0.5, "y": 0.5, "explanation": "retry"}]}',
+        ]
+        _grounding.locate(vlm, b"png", "task")
+        first_kwargs = vlm.complete.call_args_list[0].kwargs
+        second_kwargs = vlm.complete.call_args_list[1].kwargs
+        assert first_kwargs.get("json_schema") is _grounding.GROUNDING_JSON_SCHEMA
+        assert second_kwargs.get("json_schema") is _grounding.GROUNDING_JSON_SCHEMA

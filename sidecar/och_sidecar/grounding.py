@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_GROUNDING_SYSTEM_PROMPT = """You are a UI grounding assistant. Given a screenshot and a task description, output the screen coordinates where the user should click to complete the task.
 
 IMPORTANT: Respond ONLY with a valid JSON object — no prose, no markdown fences.
+IMPORTANT: The "explanation" field MUST be written in English. The downstream text-to-speech engine only supports English, so any other language will fail to play back.
 
 Schema:
 {
@@ -39,7 +40,7 @@ Schema:
     {
       "x": <float 0.0–1.0>,
       "y": <float 0.0–1.0>,
-      "explanation": "<one short sentence>"
+      "explanation": "<one short sentence, English only>"
     }
   ]
 }
@@ -53,9 +54,35 @@ Focus on:
 - the main interactive elements (buttons, inputs, menus) and their rough locations
 - any dialog, modal, or notification currently on top
 
+IMPORTANT: Respond in English only — the downstream text-to-speech engine does not support other languages.
 Respond with plain prose — no JSON, no lists, no code fences."""
 
 _RETRY_SUFFIX = "\n\nRespond ONLY with the JSON object. No explanation, no code fences."
+
+
+# JSON schema passed to providers that support structured outputs
+# (Ollama via `format`, OpenAI via `response_format.json_schema`). Providers
+# that don't support schema-constrained decoding accept the kwarg as a no-op
+# and the prompt-based fallback still works.
+GROUNDING_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "number", "minimum": 0, "maximum": 1},
+                    "y": {"type": "number", "minimum": 0, "maximum": 1},
+                    "explanation": {"type": "string"},
+                },
+                "required": ["x", "y", "explanation"],
+            },
+        },
+    },
+    "required": ["steps"],
+}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -72,13 +99,23 @@ def locate(
     ``system_prompt`` overrides the built-in grounding prompt (used by the
     settings-page prompt editor). Pass ``None`` to keep the default.
 
+    Providers that support structured outputs (Ollama, OpenAI) are called
+    with ``json_schema=GROUNDING_JSON_SCHEMA`` so the model is constrained to
+    emit valid JSON — this eliminates the prompt-based retry in the common
+    case. Providers that don't support it transparently ignore the kwarg and
+    the retry path still covers them.
+
     Raises `ProviderError` if both attempts fail to parse.
     """
     base = (system_prompt or DEFAULT_GROUNDING_SYSTEM_PROMPT).rstrip()
     prompt = f"{base}\n\nTask: {question}"
 
-    # First attempt
-    raw = vlm.complete(prompt, image_bytes=image_png)
+    # First attempt — ask the provider for schema-constrained output.
+    raw = vlm.complete(
+        prompt,
+        image_bytes=image_png,
+        json_schema=GROUNDING_JSON_SCHEMA,
+    )
     first_err_msg: str
     try:
         parsed = _parse(raw)
@@ -88,8 +125,13 @@ def locate(
         first_err_msg = str(exc)
         logger.warning("grounding parse error (will retry): %s | raw=%r", exc, raw[:200])
 
-    # Retry with a stricter suffix
-    raw2 = vlm.complete(prompt + _RETRY_SUFFIX, image_bytes=image_png)
+    # Retry with a stricter prompt suffix. Keep the schema on — it's a pure
+    # win when the provider supports it, and a no-op otherwise.
+    raw2 = vlm.complete(
+        prompt + _RETRY_SUFFIX,
+        image_bytes=image_png,
+        json_schema=GROUNDING_JSON_SCHEMA,
+    )
     try:
         parsed = _parse(raw2)
         parsed["raw"] = raw2

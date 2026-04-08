@@ -50,7 +50,13 @@ class AnthropicVlm(VlmProvider):
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
 
-    def complete(self, prompt: str, image_bytes: bytes | None = None) -> str:
+    def complete(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        json_schema: dict[str, Any] | None = None,  # noqa: ARG002 — accepted for API parity
+    ) -> str:
         try:
             import anthropic  # type: ignore[import]
         except ImportError as exc:

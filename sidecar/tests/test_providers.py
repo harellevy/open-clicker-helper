@@ -200,3 +200,34 @@ class TestOllamaVlm:
         assert msg["images"] == [base64.b64encode(b"fake png bytes").decode()]
         # Ollama expects raw base64, not a data: URI.
         assert not msg["images"][0].startswith("data:")
+
+    def test_complete_forwards_json_schema_as_format(self):
+        """When a caller passes json_schema, it should be sent verbatim as
+        the `format` field so Ollama constrains decoding to match the schema.
+        See https://docs.ollama.com/capabilities/structured-outputs."""
+        vlm = OllamaVlm()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "{}"}}
+        mock_resp.raise_for_status = MagicMock()
+        schema = {
+            "type": "object",
+            "properties": {"x": {"type": "number"}},
+            "required": ["x"],
+        }
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            vlm.complete("hello", json_schema=schema)
+
+        sent_json = mock_post.call_args.kwargs["json"]
+        assert sent_json["format"] == schema
+
+    def test_complete_without_json_schema_omits_format(self):
+        """No `format` field when the caller didn't ask for structured output."""
+        vlm = OllamaVlm()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "hi"}}
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            vlm.complete("hello")
+
+        sent_json = mock_post.call_args.kwargs["json"]
+        assert "format" not in sent_json
