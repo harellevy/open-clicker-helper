@@ -17,7 +17,14 @@ mlx = [
 ]
 faster-whisper = ["faster-whisper>=1.0"]
 kokoro = ["kokoro-onnx>=0.4", "soundfile>=0.12"]
-test = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+# PEP 735 dependency groups. `uv sync` installs the `dev` group by default,
+# so CI doesn't need any extra flags to get pytest.
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+]
 
 [project.scripts]
 och-sidecar = "och_sidecar.__main__:main"

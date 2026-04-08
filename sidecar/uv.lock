@@ -817,7 +817,9 @@ kokoro = [
 mlx = [
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
 ]
-test = [
+
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -829,11 +831,15 @@ requires-dist = [
     { name = "kokoro-onnx", marker = "extra == 'kokoro'", specifier = ">=0.4" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = ">=0.4" },
     { name = "pydantic", specifier = ">=2.9" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24" },
     { name = "soundfile", marker = "extra == 'kokoro'", specifier = ">=0.12" },
 ]
-provides-extras = ["mlx", "faster-whisper", "kokoro", "test"]
+provides-extras = ["mlx", "faster-whisper", "kokoro"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+]
 
 [[package]]
 name = "onnxruntime"
