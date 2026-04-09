@@ -546,11 +546,26 @@ mod tests {
 
     #[test]
     fn poll_returns_max_duration_when_voice_never_stops() {
-        // A thread keeps "observing" voice so last_voiced_ms stays fresh.
-        // The loop should eventually bail out on max_duration.
+        // A background thread keeps "observing" voice so last_voiced_ms
+        // stays fresh; the poll loop should exit on max_duration, not
+        // silence.  Because this test races real time, the silence window
+        // has to be wide enough to tolerate scheduler jitter on loaded CI
+        // runners — the original 120 ms window was getting starved on
+        // macos-14 and flaking to Silence.
+        let vad = VadConfig {
+            rms_threshold: 0.01,
+            silence_after_voice: Duration::from_millis(400),
+            initial_grace: Duration::from_millis(100),
+            max_duration: Duration::from_millis(600),
+        };
+
         let (_tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
         let start = Instant::now();
         let state = Arc::new(VadState::new(start));
+        // Seed first_voiced_ms up-front so we're past the initial-grace
+        // path regardless of how quickly the background thread gets
+        // scheduled on a slow runner.
+        state.observe(0.5, 0.01);
 
         let st_bg = Arc::clone(&state);
         let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -558,11 +573,11 @@ mod tests {
         let bg = std::thread::spawn(move || {
             while !stop_bg.load(Ordering::Relaxed) {
                 st_bg.observe(0.5, 0.01);
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(5));
             }
         });
 
-        let reason = poll_until_stop(&_short_vad(), &rx, &state, start);
+        let reason = poll_until_stop(&vad, &rx, &state, start);
         stop_flag.store(true, Ordering::Relaxed);
         bg.join().unwrap();
         assert_eq!(reason, StopReason::MaxDuration);
