@@ -233,3 +233,120 @@ class TestRefine:
         prompt = vlm.complete.call_args.args[0]
         assert "ONLY THIS PROMPT" in prompt
         assert _grounding.DEFAULT_REFINE_SYSTEM_PROMPT not in prompt
+
+
+# ── locate_from_ax ────────────────────────────────────────────────────────────
+
+class TestLocateFromAx:
+    """The macOS Accessibility fast path — no VLM call required when the
+    question mentions text that matches a candidate's label."""
+
+    def _cand(self, **kwargs):
+        base = {
+            "role": "AXButton",
+            "title": "",
+            "description": "",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.1,
+            "height": 0.1,
+        }
+        base.update(kwargs)
+        return base
+
+    def test_returns_none_when_candidates_empty(self):
+        assert _grounding.locate_from_ax([], "click save") is None
+
+    def test_returns_none_when_question_empty(self):
+        cands = [self._cand(title="Save")]
+        assert _grounding.locate_from_ax(cands, "") is None
+
+    def test_returns_none_on_no_match(self):
+        cands = [
+            self._cand(title="Cancel"),
+            self._cand(title="Open File"),
+        ]
+        assert _grounding.locate_from_ax(cands, "click save") is None
+
+    def test_exact_title_match_returns_centre_of_box(self):
+        cands = [
+            self._cand(title="Save", x=0.2, y=0.4, width=0.1, height=0.2),
+        ]
+        result = _grounding.locate_from_ax(cands, "click the save button")
+        assert result is not None
+        assert result["source"] == "ax"
+        step = result["steps"][0]
+        # centre of (0.2, 0.4, 0.1, 0.2) = (0.25, 0.5)
+        assert step["x"] == pytest.approx(0.25)
+        assert step["y"] == pytest.approx(0.5)
+        assert "Save" in step["explanation"]
+
+    def test_match_against_description_field(self):
+        cands = [
+            self._cand(title="", description="Submit form", x=0.1, y=0.1, width=0.2, height=0.2),
+        ]
+        result = _grounding.locate_from_ax(cands, "submit the form please")
+        assert result is not None
+        assert result["steps"][0]["x"] == pytest.approx(0.2)
+        assert result["steps"][0]["y"] == pytest.approx(0.2)
+
+    def test_picks_best_scoring_candidate_among_many(self):
+        cands = [
+            self._cand(title="Cancel", x=0.0, y=0.0, width=0.1, height=0.1),
+            self._cand(
+                title="Save Document",
+                x=0.5,
+                y=0.5,
+                width=0.2,
+                height=0.2,
+            ),
+            self._cand(title="Open", x=0.8, y=0.1, width=0.1, height=0.1),
+        ]
+        result = _grounding.locate_from_ax(cands, "save my document")
+        assert result is not None
+        # Best hit is "Save Document" — its centre sits at (0.6, 0.6).
+        assert result["steps"][0]["x"] == pytest.approx(0.6)
+        assert result["steps"][0]["y"] == pytest.approx(0.6)
+
+    def test_stopwords_do_not_count_as_matches(self):
+        """Words like 'click' and 'button' are too generic — a candidate
+        whose only overlap is those stopwords must not match."""
+        cands = [self._cand(title="Random Button", x=0.0, y=0.0, width=0.1, height=0.1)]
+        assert _grounding.locate_from_ax(cands, "click the button") is None
+
+    def test_rejects_zero_size_candidate(self):
+        cands = [self._cand(title="Save", width=0.0, height=0.0)]
+        assert _grounding.locate_from_ax(cands, "save") is None
+
+    def test_falls_back_to_role_when_no_labels(self):
+        """If only the role matches, that's still a potential hit — useful
+        for things like 'click search field' on a bare AXSearchField."""
+        cands = [
+            self._cand(role="AXSearchField", x=0.4, y=0.1, width=0.2, height=0.05),
+        ]
+        result = _grounding.locate_from_ax(cands, "focus the search")
+        # "search" is in role "AXSearchField"; "focus" doesn't match but
+        # that's fine because the scoring is based on question coverage.
+        assert result is not None
+        assert result["steps"][0]["x"] == pytest.approx(0.5)
+
+    def test_result_shape_matches_locate(self):
+        """Callers downstream shouldn't care whether the steps came from AX
+        or VLM — shape must be identical (list of {x, y, explanation})."""
+        cands = [self._cand(title="Save", x=0.1, y=0.1, width=0.1, height=0.1)]
+        result = _grounding.locate_from_ax(cands, "save")
+        assert isinstance(result, dict)
+        assert "steps" in result
+        assert isinstance(result["steps"], list)
+        for step in result["steps"]:
+            assert {"x", "y", "explanation"} <= set(step.keys())
+
+    def test_handles_non_dict_candidates_gracefully(self):
+        """Defensive: junk items in the list shouldn't crash the walker."""
+        cands = [
+            "not a dict",
+            None,
+            self._cand(title="Save", x=0.1, y=0.1, width=0.1, height=0.1),
+        ]
+        result = _grounding.locate_from_ax(cands, "save")
+        assert result is not None

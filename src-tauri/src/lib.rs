@@ -305,6 +305,31 @@ async fn process_recording(app: &tauri::AppHandle) {
         }
     };
 
+    // Collect AX-tree candidates for the focused window. The call itself is
+    // fast (raw CF pointer walk) but it hits the WindowServer, so run it in
+    // spawn_blocking to stay off the async runtime. Candidates are normalised
+    // to the logical screen's [0, 1] coordinate space before we forward them
+    // to the sidecar, mirroring the pipeline's convention for VLM coordinates.
+    let ax_candidates =
+        match tokio::task::spawn_blocking(|| platform::current().ax().focused_window_candidates())
+            .await
+        {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                tracing::warn!("ax_locate failed (continuing without AX): {e}");
+                Vec::new()
+            }
+            Err(e) => {
+                tracing::warn!("spawn_blocking for ax_locate: {e}");
+                Vec::new()
+            }
+        };
+    let ax_candidates_json = normalise_ax_candidates(app, ax_candidates);
+    tracing::info!(
+        "AX candidates: {} (normalised)",
+        ax_candidates_json.as_array().map(Vec::len).unwrap_or(0)
+    );
+
     // Call the sidecar pipeline.
     let sidecar = state.sidecar.lock().await.clone();
     let Some(sidecar) = sidecar else {
@@ -325,6 +350,7 @@ async fn process_recording(app: &tauri::AppHandle) {
                 "audio_b64": audio_b64,
                 "image_b64": image_b64,
                 "settings": settings_val,
+                "ax_candidates": ax_candidates_json,
             }),
         )
         .await
@@ -353,6 +379,71 @@ fn load_settings_json(app: &tauri::AppHandle) -> serde_json::Value {
         .ok()
         .and_then(|s| s.get(store::SETTINGS_KEY))
         .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Convert a batch of raw AX candidates (screen-space logical points) into
+/// JSON blobs with normalised [0, 1] coordinates, ready for the sidecar.
+///
+/// The focus-capture side of the pipeline captures the whole primary display,
+/// so the grounding layer normalises to the full-screen extents. AX also
+/// reports coordinates in the screen's top-left origin — no window math
+/// required here.
+///
+/// Logical (points), *not* physical (pixels), is the right denominator
+/// because `AXUIElementCopyAttributeValue` returns values in points on
+/// Retina displays. `monitor.size()` is physical pixels in Tauri 2, so we
+/// divide by `scale_factor()` to recover the logical extents. Failing that
+/// we fall back to a reasonable 1440×900 default so we at least emit *some*
+/// normalisation rather than crash.
+fn normalise_ax_candidates(
+    app: &tauri::AppHandle,
+    candidates: Vec<platform::AxCandidate>,
+) -> serde_json::Value {
+    if candidates.is_empty() {
+        return serde_json::json!([]);
+    }
+
+    let (logical_w, logical_h) = logical_screen_size(app).unwrap_or((1440.0, 900.0));
+    if logical_w <= 0.0 || logical_h <= 0.0 {
+        return serde_json::json!([]);
+    }
+
+    let normalised: Vec<serde_json::Value> = candidates
+        .into_iter()
+        .map(|c| {
+            let x = (c.x / logical_w).clamp(0.0, 1.0);
+            let y = (c.y / logical_h).clamp(0.0, 1.0);
+            let w = (c.width / logical_w).clamp(0.0, 1.0);
+            let h = (c.height / logical_h).clamp(0.0, 1.0);
+            serde_json::json!({
+                "role": c.role,
+                "title": c.title,
+                "description": c.description,
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+            })
+        })
+        .collect();
+
+    serde_json::Value::Array(normalised)
+}
+
+/// Return the primary monitor's logical (point) size as `(width, height)`,
+/// or `None` when the monitor can't be queried. Used to normalise AX
+/// candidates into the pipeline's [0, 1] coordinate space.
+fn logical_screen_size(app: &tauri::AppHandle) -> Option<(f64, f64)> {
+    let window = app.get_webview_window("overlay")?;
+    let monitor = window.primary_monitor().ok().flatten()?;
+    let physical = monitor.size();
+    let scale = monitor.scale_factor();
+    if scale <= 0.0 {
+        return None;
+    }
+    let w = f64::from(physical.width) / scale;
+    let h = f64::from(physical.height) / scale;
+    Some((w, h))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

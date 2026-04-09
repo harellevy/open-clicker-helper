@@ -227,6 +227,158 @@ def refine(
         return None
 
 
+def locate_from_ax(
+    ax_candidates: list[dict[str, Any]],
+    question: str,
+) -> dict[str, Any] | None:
+    """Try to answer a grounding question directly from the macOS AX tree.
+
+    Returns a parsed grounding result ``{"steps": [...], "raw": str, "source":
+    "ax"}`` when at least one candidate's text matches the question, or
+    ``None`` when no candidate matches. The match is a token-overlap score
+    over the candidate's ``role``, ``title``, and ``description`` fields.
+
+    ``ax_candidates`` items follow the Rust ``AxCandidate`` shape:
+
+        {role, title, description, x, y, width, height}
+
+    where ``x``/``y`` are already normalised to [0, 1] relative to the focused
+    window's logical screen coordinates (Rust does that conversion before
+    handing candidates to the sidecar — the VLM pipeline always deals in
+    normalised coordinates, so this keeps the dispatch uniform).
+
+    The returned ``steps`` list has exactly one entry pointing at the centre
+    of the best-matching candidate's bounding box. We intentionally don't try
+    to chain multiple AX candidates into a multi-step plan — the iterative
+    loop re-grounds on a fresh screenshot between clicks, so each AX hit just
+    needs to describe one good click.
+    """
+    if not ax_candidates:
+        return None
+
+    q_tokens = _tokenise(question)
+    if not q_tokens:
+        return None
+
+    best: tuple[float, dict[str, Any]] | None = None
+    for cand in ax_candidates:
+        if not isinstance(cand, dict):
+            continue
+        haystack_parts = [
+            str(cand.get("role", "")),
+            str(cand.get("title", "")),
+            str(cand.get("description", "")),
+        ]
+        haystack_tokens = _tokenise(" ".join(haystack_parts))
+        if not haystack_tokens:
+            continue
+        score = _match_score(q_tokens, haystack_tokens)
+        if score <= 0.0:
+            continue
+        if best is None or score > best[0]:
+            best = (score, cand)
+
+    if best is None:
+        return None
+
+    _score, cand = best
+    try:
+        x = float(cand.get("x", 0.0))
+        y = float(cand.get("y", 0.0))
+        w = float(cand.get("width", 0.0))
+        h = float(cand.get("height", 0.0))
+    except (TypeError, ValueError):
+        return None
+
+    if w <= 0.0 or h <= 0.0:
+        return None
+
+    cx = max(0.0, min(1.0, x + w / 2.0))
+    cy = max(0.0, min(1.0, y + h / 2.0))
+
+    label = (cand.get("title") or cand.get("description") or cand.get("role") or "").strip()
+    explanation = f"Clicking {label}." if label else "Clicking the matched control."
+
+    return {
+        "steps": [
+            {
+                "x": cx,
+                "y": cy,
+                "explanation": explanation,
+            }
+        ],
+        "raw": f"ax:{cand.get('role', '')}:{label}",
+        "source": "ax",
+    }
+
+
+# Split on non-alphanumeric AND on camelCase boundaries so "AXSearchField"
+# tokenises as {"ax", "search", "field"} — otherwise the AX role prefix
+# swallows the whole word and we can't match substrings inside it.
+_TOKEN_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+")
+
+# Words too generic to count for matching — otherwise "click the button" picks
+# the first AXButton on screen regardless of its label.
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "click",
+        "clicks",
+        "clicking",
+        "press",
+        "presses",
+        "pressing",
+        "tap",
+        "taps",
+        "tapping",
+        "please",
+        "on",
+        "to",
+        "in",
+        "at",
+        "for",
+        "and",
+        "or",
+        "of",
+        "button",
+        "link",
+        "item",
+        "field",
+    }
+)
+
+
+def _tokenise(text: str) -> set[str]:
+    # Split camelCase (`AXSearchField`) *before* lowercasing so the word
+    # boundaries survive. AX-role tokens all start with the literal `AX`
+    # prefix — strip that too so `AXButton` can match "button" if it ever
+    # slips past the stopword filter.
+    raw = _TOKEN_RE.findall(text)
+    out: set[str] = set()
+    for t in raw:
+        low = t.lower()
+        if low == "ax":
+            continue
+        if low in _STOPWORDS:
+            continue
+        out.add(low)
+    return out
+
+
+def _match_score(q: set[str], hay: set[str]) -> float:
+    """Jaccard-like overlap, but biased toward the question's coverage: we
+    care whether the candidate contains what the user asked for, not whether
+    the candidate is a clean subset of the question."""
+    if not q or not hay:
+        return 0.0
+    inter = q & hay
+    if not inter:
+        return 0.0
+    return len(inter) / len(q)
+
+
 def _parse_single_point(text: str) -> dict[str, Any]:
     """Parse a single ``{x, y, explanation}`` JSON object. Clamps to [0, 1].
 

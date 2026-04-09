@@ -561,6 +561,190 @@ class TestRefinementPass:
         assert final["steps"][0]["y"] == pytest.approx(0.5)
 
 
+class TestAxGroundingDispatch:
+    """Mode dispatch between the AX fast path and the VLM grounding path.
+
+    The test fixtures mock STT/VLM/TTS and `grounding.locate` so we can
+    assert exactly which code path ran without spinning up a real provider.
+    """
+
+    def _run(
+        self,
+        *,
+        ax_candidates,
+        mode,
+        ax_hit: bool,
+    ):
+        from och_sidecar import grounding as _grounding
+        from och_sidecar import imaging as _imaging
+
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "click save"
+        mock_vlm = MagicMock()
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b""
+
+        ax_return = (
+            {
+                "steps": [
+                    {"x": 0.42, "y": 0.58, "explanation": "Clicking Save."}
+                ],
+                "raw": "ax:AXButton:Save",
+                "source": "ax",
+            }
+            if ax_hit
+            else None
+        )
+
+        with (
+            patch.object(_pipeline, "_make_stt", return_value=mock_stt),
+            patch.object(_pipeline, "_make_vlm", return_value=mock_vlm),
+            patch.object(_pipeline, "_make_tts", return_value=mock_tts),
+            patch.object(
+                _imaging,
+                "downscale_png",
+                return_value=(b"small", (100, 100), (50, 50)),
+            ) as mock_downscale,
+            patch.object(
+                _imaging,
+                "crop_around",
+                return_value=None,
+            ),
+            patch.object(
+                _grounding,
+                "locate_from_ax",
+                return_value=ax_return,
+            ) as mock_ax,
+            patch.object(
+                _grounding,
+                "locate",
+                return_value={
+                    "steps": [{"x": 0.1, "y": 0.2, "explanation": "vlm"}],
+                    "raw": "vlm raw",
+                },
+            ) as mock_locate,
+            patch.object(_grounding, "refine", return_value=None) as mock_refine,
+        ):
+            events, final = _collect(
+                _pipeline.run(
+                    _b64(_fake_wav()),
+                    _b64(b"\x89PNG"),
+                    {"grounding": {"mode": mode}},
+                    ax_candidates=ax_candidates,
+                )
+            )
+
+        return events, final, mock_ax, mock_locate, mock_refine, mock_downscale
+
+    def test_auto_mode_ax_hit_skips_vlm(self):
+        """AX-match in auto mode: locate() must never be called."""
+        events, final, mock_ax, mock_locate, _refine, mock_downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Save"}],
+            mode="auto",
+            ax_hit=True,
+        )
+        mock_ax.assert_called_once()
+        mock_locate.assert_not_called()
+        # The AX hit also skips the downscale+VLM preamble entirely.
+        mock_downscale.assert_not_called()
+        assert final["steps"] == [
+            {"x": 0.42, "y": 0.58, "explanation": "Clicking Save."}
+        ]
+        # The grounding_done event carries the source tag so the UI can
+        # display "via AX" or "via VLM" for observability.
+        grounding_events = [e for e, _ in events if e == "grounding_done"]
+        assert grounding_events == ["grounding_done"]
+        payload = [p for e, p in events if e == "grounding_done"][0]
+        assert payload.get("source") == "ax"
+
+    def test_auto_mode_ax_miss_falls_back_to_vlm(self):
+        """AX-miss in auto mode: locate() must be called on the downscaled image."""
+        events, final, mock_ax, mock_locate, _refine, mock_downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Cancel"}],
+            mode="auto",
+            ax_hit=False,
+        )
+        mock_ax.assert_called_once()
+        mock_locate.assert_called_once()
+        mock_downscale.assert_called_once()
+        assert final["steps"] == [{"x": 0.1, "y": 0.2, "explanation": "vlm"}]
+
+    def test_auto_mode_no_candidates_goes_straight_to_vlm(self):
+        """Empty AX list in auto mode: don't even call locate_from_ax."""
+        _events, final, mock_ax, mock_locate, _refine, mock_downscale = self._run(
+            ax_candidates=[],
+            mode="auto",
+            ax_hit=False,
+        )
+        mock_ax.assert_not_called()
+        mock_locate.assert_called_once()
+        mock_downscale.assert_called_once()
+        assert final["steps"] == [{"x": 0.1, "y": 0.2, "explanation": "vlm"}]
+
+    def test_ax_only_mode_hit_skips_vlm(self):
+        _events, final, _ax, mock_locate, _refine, _downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Save"}],
+            mode="ax",
+            ax_hit=True,
+        )
+        mock_locate.assert_not_called()
+        assert final["steps"][0]["x"] == pytest.approx(0.42)
+
+    def test_ax_only_mode_miss_returns_empty_steps(self):
+        """AX-only + miss: the VLM must not be called, and steps are empty."""
+        _events, final, _ax, mock_locate, _refine, mock_downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Cancel"}],
+            mode="ax",
+            ax_hit=False,
+        )
+        mock_locate.assert_not_called()
+        mock_downscale.assert_not_called()
+        assert final["steps"] == []
+        assert final["answer"]  # still synthesises a "couldn't find" reply
+
+    def test_vlm_only_mode_ignores_ax_candidates(self):
+        """VLM-only: locate_from_ax never runs, regardless of candidates."""
+        _events, _final, mock_ax, mock_locate, _refine, mock_downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Save"}],
+            mode="vlm",
+            ax_hit=True,  # would hit in AX mode, but vlm mode skips
+        )
+        mock_ax.assert_not_called()
+        mock_locate.assert_called_once()
+        mock_downscale.assert_called_once()
+
+    def test_ax_hit_skips_refine_pass(self):
+        """Refinement is for VLM output — AX coords are already pixel-accurate."""
+        _events, _final, _ax, _locate, mock_refine, _downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Save"}],
+            mode="auto",
+            ax_hit=True,
+        )
+        mock_refine.assert_not_called()
+
+    def test_ax_hit_emits_ax_match_event(self):
+        events, _final, *_ = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Save"}],
+            mode="auto",
+            ax_hit=True,
+        )
+        names = [e for e, _ in events]
+        assert "ax_match" in names
+        payload = dict(events)["ax_match"]
+        assert payload["hit"] is True
+        assert payload["candidates"] == 1
+
+    def test_unknown_mode_falls_back_to_auto(self):
+        """An invalid mode string should behave as 'auto' (fail-safe)."""
+        _events, final, mock_ax, _locate, _refine, _downscale = self._run(
+            ax_candidates=[{"role": "AXButton", "title": "Save"}],
+            mode="definitely-not-real",
+            ax_hit=True,
+        )
+        mock_ax.assert_called_once()
+        assert final["steps"][0]["x"] == pytest.approx(0.42)
+
+
 class TestOllamaTimeout:
     """Vision inference on a 7B local model with a multi-MB screenshot
     routinely takes >60s on cold start. Pin the new generous timeout."""
