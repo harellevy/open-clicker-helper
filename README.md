@@ -26,7 +26,11 @@ ideas and bug reports are all very welcome:
 - Rust, Tauri 2, and native desktop plumbing
 - Python AI pipelines (Whisper, Kokoro, Ollama, llama.cpp, MLX)
 - macOS Accessibility APIs and ScreenCaptureKit
-- A future Windows port (the platform layer is stubbed and waiting)
+- **OS coverage** — a Windows port (the platform layer is stubbed and waiting)
+  and eventually Linux
+- **Language support** — STT and TTS models for non-English locales, including
+  swapping in better multilingual Whisper / Kokoro variants and validating
+  grounding prompts across languages
 - Frontend polish (React + Vite), UX for a transparent cursor overlay
 - Docs, packaging, CI, release engineering
 
