@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tauri::{Manager, State};
 
 use crate::error::{AppError, AppResult};
+use crate::history::{self, SessionRecord};
 use crate::platform;
 use crate::store::{Settings, SETTINGS_KEY, STORE_FILE};
 use crate::AppState;
@@ -182,6 +183,22 @@ fn resolve_px(app: &tauri::AppHandle, x: f64, y: f64) -> (f64, f64) {
         (x.clamp(0.0, 1.0) * f64::from(size.width)).round(),
         (y.clamp(0.0, 1.0) * f64::from(size.height)).round(),
     )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Conversation history
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Return all stored session records (oldest first).
+#[tauri::command]
+pub fn get_history(app: tauri::AppHandle) -> AppResult<Vec<SessionRecord>> {
+    history::load(&app)
+}
+
+/// Wipe the entire conversation history.
+#[tauri::command]
+pub fn clear_history(app: tauri::AppHandle) -> AppResult<()> {
+    history::clear(&app)
 }
 
 /// Generic JSON-RPC pass-through to the Python sidecar.
