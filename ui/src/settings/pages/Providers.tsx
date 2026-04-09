@@ -1,5 +1,17 @@
 import { useState } from "react";
 import { type ProviderTestResult, type Settings, api } from "@/lib/api";
+import { VoiceSelect } from "@/components/VoiceSelect";
+
+const KOKORO_VOICES = [
+  { value: "af_heart", label: "af_heart (English, female)" },
+  { value: "am_adam", label: "am_adam (English, male)" },
+  { value: "bf_emma", label: "bf_emma (British English, female)" },
+  { value: "bm_lewis", label: "bm_lewis (British English, male)" },
+];
+
+const OPENAI_VOICES = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"].map(
+  (v) => ({ value: v, label: v }),
+);
 
 interface Props {
   settings: Settings;
@@ -199,18 +211,14 @@ export function ProvidersPage({ settings, onChange }: Props) {
         />
         {settings.tts.provider === "kokoro" ? (
           <SettingRow label="Voice">
-            <select
-              className="input"
+            <VoiceSelect
               value={settings.tts.kokoro_voice}
-              onChange={(e) =>
-                save({ ...settings, tts: { ...settings.tts, kokoro_voice: e.target.value } })
+              options={KOKORO_VOICES}
+              ariaLabel="Kokoro voice"
+              onChange={(v) =>
+                save({ ...settings, tts: { ...settings.tts, kokoro_voice: v } })
               }
-            >
-              <option value="af_heart">af_heart (English, female)</option>
-              <option value="am_adam">am_adam (English, male)</option>
-              <option value="bf_emma">bf_emma (British English, female)</option>
-              <option value="bm_lewis">bm_lewis (British English, male)</option>
-            </select>
+            />
           </SettingRow>
         ) : (
           <>
@@ -226,17 +234,14 @@ export function ProvidersPage({ settings, onChange }: Props) {
               />
             </SettingRow>
             <SettingRow label="Voice">
-              <select
-                className="input"
+              <VoiceSelect
                 value={settings.tts.openai_voice}
-                onChange={(e) =>
-                  save({ ...settings, tts: { ...settings.tts, openai_voice: e.target.value } })
+                options={OPENAI_VOICES}
+                ariaLabel="OpenAI voice"
+                onChange={(v) =>
+                  save({ ...settings, tts: { ...settings.tts, openai_voice: v } })
                 }
-              >
-                {["alloy", "echo", "fable", "nova", "onyx", "shimmer"].map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
+              />
             </SettingRow>
           </>
         )}

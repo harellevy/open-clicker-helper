@@ -548,3 +548,119 @@ kbd {
   .reset-section p { color: #8e8e93; }
   .reset-code { background: rgba(255,255,255,0.06); }
 }
+
+/* ── VoiceSelect dropdown ─────────────────────────────────────────────────── */
+
+.voice-select {
+  position: relative;
+  width: 100%;
+}
+
+.voice-select__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.voice-select__trigger-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-select__chevron {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.voice-select__menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.voice-select__option {
+  display: flex;
+  align-items: center;
+  /* Speaker icon on the very left, text to its right. The fixed column keeps
+     labels aligned across rows. */
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.voice-select__option:hover {
+  background: rgba(0, 122, 255, 0.1);
+}
+.voice-select__option--active {
+  background: rgba(0, 122, 255, 0.14);
+  font-weight: 500;
+}
+
+.voice-select__speaker {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.02);
+  color: inherit;
+  cursor: pointer;
+}
+.voice-select__speaker:hover {
+  background: rgba(0, 122, 255, 0.15);
+  border-color: rgba(0, 122, 255, 0.4);
+  color: #007aff;
+}
+.voice-select__speaker:active {
+  background: rgba(0, 122, 255, 0.25);
+}
+
+.voice-select__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .voice-select__menu {
+    background: #1c1c1e;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+  .voice-select__option:hover {
+    background: rgba(10, 132, 255, 0.18);
+  }
+  .voice-select__option--active {
+    background: rgba(10, 132, 255, 0.24);
+  }
+  .voice-select__speaker {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .voice-select__speaker:hover {
+    color: #0a84ff;
+    border-color: rgba(10, 132, 255, 0.5);
+    background: rgba(10, 132, 255, 0.18);
+  }
+}

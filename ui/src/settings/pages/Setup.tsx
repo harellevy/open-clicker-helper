@@ -22,6 +22,18 @@ import {
   api,
   onSidecarProgress,
 } from "@/lib/api";
+import { VoiceSelect } from "@/components/VoiceSelect";
+
+const KOKORO_VOICES = [
+  { value: "af_heart", label: "af_heart (English, female)" },
+  { value: "am_adam", label: "am_adam (English, male)" },
+  { value: "bf_emma", label: "bf_emma (British English, female)" },
+  { value: "bm_lewis", label: "bm_lewis (British English, male)" },
+];
+
+const OPENAI_VOICES = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"].map(
+  (v) => ({ value: v, label: v }),
+);
 
 type Step = "permissions" | "stt" | "vlm" | "tts" | "hotkey";
 
@@ -572,16 +584,12 @@ function TtsStep({
         <div className="setup-model-block">
           <div className="setup-row">
             <label>Voice</label>
-            <select
-              className="input"
+            <VoiceSelect
               value={draft.tts.kokoro_voice}
-              onChange={(e) => onChange({ ...draft.tts, kokoro_voice: e.target.value })}
-            >
-              <option value="af_heart">af_heart (English, female)</option>
-              <option value="am_adam">am_adam (English, male)</option>
-              <option value="bf_emma">bf_emma (British English, female)</option>
-              <option value="bm_lewis">bm_lewis (British English, male)</option>
-            </select>
+              options={KOKORO_VOICES}
+              ariaLabel="Kokoro voice"
+              onChange={(v) => onChange({ ...draft.tts, kokoro_voice: v })}
+            />
           </div>
           {status && <StatusLine ok={isReady ?? false} message={status.message} />}
           {isActive && (
@@ -617,15 +625,12 @@ function TtsStep({
           </div>
           <div className="setup-row">
             <label>Voice</label>
-            <select
-              className="input"
+            <VoiceSelect
               value={draft.tts.openai_voice}
-              onChange={(e) => onChange({ ...draft.tts, openai_voice: e.target.value })}
-            >
-              {["alloy", "echo", "fable", "nova", "onyx", "shimmer"].map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
+              options={OPENAI_VOICES}
+              ariaLabel="OpenAI voice"
+              onChange={(v) => onChange({ ...draft.tts, openai_voice: v })}
+            />
           </div>
         </div>
       )}
