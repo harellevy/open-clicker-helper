@@ -112,9 +112,12 @@ def _pipeline_run(params: dict[str, Any]):
     """Streaming handler: yields (event, payload) progress tuples.
 
     params:
-        audio_b64  – base-64-encoded WAV audio (required)
-        image_b64  – base-64-encoded PNG screenshot, optional
-        settings   – provider settings dict, optional
+        audio_b64      – base-64-encoded WAV audio (required)
+        image_b64      – base-64-encoded PNG screenshot, optional
+        settings       – provider settings dict, optional
+        ax_candidates  – list of macOS AX-tree candidates (see AxCandidate
+                         in Rust) with normalised x/y/width/height in
+                         [0, 1], optional. Ignored on non-macOS shells.
     """
     from . import pipeline as _pipeline
 
@@ -122,6 +125,7 @@ def _pipeline_run(params: dict[str, Any]):
         params["audio_b64"],
         params.get("image_b64"),
         params.get("settings", {}),
+        ax_candidates=params.get("ax_candidates"),
     )
 
 
@@ -136,25 +140,49 @@ def _grounding_locate(params: dict[str, Any]) -> dict[str, Any]:
     fresh screenshot and calls this to re-ground the next step. The screenshot
     is downscaled the same way as in pipeline.run() to keep upload times low.
 
+    AX candidates are honoured here too — when the caller provides a fresh
+    list (Rust does this on every iterative step) and the user has AX mode
+    enabled, we try the fast path first and only fall back to the VLM on a
+    miss.
+
     params:
-        image_b64  – base-64-encoded PNG screenshot (required)
-        question   – the user's original transcribed question (required)
-        settings   – provider settings dict, optional
+        image_b64      – base-64-encoded PNG screenshot (required)
+        question       – the user's original transcribed question (required)
+        settings       – provider settings dict, optional
+        ax_candidates  – list of macOS AX-tree candidates, optional
     """
     import base64
 
     from . import grounding as _grounding
     from . import imaging as _imaging
-    from .pipeline import _make_vlm
+    from .pipeline import _make_vlm, _normalise_grounding_mode
+
+    question = params["question"]
+    settings = params.get("settings") or {}
+    ax_candidates = params.get("ax_candidates")
+
+    grounding_cfg = settings.get("grounding") or {}
+    mode = _normalise_grounding_mode(
+        grounding_cfg.get("mode") if isinstance(grounding_cfg, dict) else None
+    )
+
+    # AX fast path — same semantics as pipeline.run().
+    if mode in ("auto", "ax") and ax_candidates:
+        ax_result = _grounding.locate_from_ax(ax_candidates, question)
+        if ax_result is not None:
+            return ax_result
+        if mode == "ax":
+            # AX-only mode + miss → return empty steps, never touch the VLM.
+            return {"steps": [], "raw": "", "source": "ax"}
 
     image_bytes = base64.b64decode(params["image_b64"])
     small_png, _orig, _new = _imaging.downscale_png(image_bytes)
-    question = params["question"]
-    settings = params.get("settings") or {}
     system_prompt = (settings.get("system_prompts") or {}).get("grounding") or None
 
     vlm = _make_vlm(settings)
-    return _grounding.locate(vlm, small_png, question, system_prompt=system_prompt)
+    result = _grounding.locate(vlm, small_png, question, system_prompt=system_prompt)
+    result.setdefault("source", "vlm")
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -93,11 +93,19 @@ def _get_system_prompts(settings: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get_grounding_opts(settings: dict[str, Any]) -> dict[str, Any]:
-    """Read the `grounding` block from settings (knobs like `refine`)."""
+    """Read the `grounding` block from settings (knobs like `refine`, `mode`)."""
     g = settings.get("grounding") or {}
     if not isinstance(g, dict):
         return {}
     return g
+
+
+def _normalise_grounding_mode(raw: Any) -> str:
+    """Clamp the mode string to one of the three supported values."""
+    mode = str(raw or "auto").strip().lower()
+    if mode not in ("auto", "ax", "vlm"):
+        return "auto"
+    return mode
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -106,6 +114,7 @@ def run(
     audio_b64: str,
     image_b64: str | None,
     settings: dict[str, Any] | None,
+    ax_candidates: list[dict[str, Any]] | None = None,
 ) -> Iterator[tuple[str, Any]]:
     """Generator pipeline for a single voice round-trip."""
     settings = settings or {}
@@ -119,6 +128,7 @@ def run(
     # Two-pass crop-and-refine defaults on — a single extra VLM call per
     # step massively tightens coordinate accuracy on full-res screenshots.
     refine_enabled = bool(grounding_opts.get("refine", True))
+    grounding_mode = _normalise_grounding_mode(grounding_opts.get("mode"))
 
     audio_bytes = base64.b64decode(audio_b64)
     image_bytes = base64.b64decode(image_b64) if image_b64 else None
@@ -164,85 +174,144 @@ def run(
     }
 
     if image_bytes is not None:
-        # ── Downscale the screenshot before anything else sees it ─────────
+        from . import grounding as _grounding
         from . import imaging as _imaging
 
-        downscale_t0 = time.monotonic()
-        small_png, orig_size, new_size = _imaging.downscale_png(image_bytes)
-        timings["downscale_ms"] = _elapsed_ms(downscale_t0)
-
-        if new_size != (0, 0):
-            logger.info(
-                "screenshot downscaled: %s → %s (%d → %d bytes, %d ms)",
-                orig_size,
-                new_size,
-                len(image_bytes),
-                len(small_png),
-                timings["downscale_ms"],
-            )
-            image_for_vlm = small_png
-        else:
-            image_for_vlm = image_bytes  # downscale failed, fall back
-
-        downscale_event: dict[str, Any] = {
-            "orig_size": list(orig_size),
-            "new_size": list(new_size),
-            "orig_bytes": len(image_bytes),
-            "new_bytes": len(image_for_vlm),
-            "elapsed_ms": timings["downscale_ms"],
-        }
-        if debug_enabled:
-            # Ship the tiny image down to the overlay so it can draw the
-            # "what the VLM sees" preview.
-            downscale_event["image_b64"] = base64.b64encode(image_for_vlm).decode()
-        yield ("image_downscaled", downscale_event)
-
-        # ── Optional caption step (debug mode only) ───────────────────────
-        caption_text = ""
-        if debug_enabled:
-            from . import grounding as _grounding
-
-            vlm = _make_vlm(settings)
-            yield ("caption_start", {})
-            caption_t0 = time.monotonic()
-            try:
-                caption_text = _grounding.caption(
-                    vlm, image_for_vlm, system_prompt=caption_prompt
-                )
-            except Exception as exc:  # noqa: BLE001 — caption is best-effort
-                caption_text = f"(caption failed: {exc})"
-                logger.warning("caption failed: %s", exc)
-            timings["caption_ms"] = _elapsed_ms(caption_t0)
+        # ── AX-tree fast path (auto + ax modes) ──────────────────────────
+        # When the focused app exposes a useful Accessibility tree, we can
+        # locate the target without loading an image into the VLM at all.
+        # The Rust shell already collected and normalised the candidates;
+        # the sidecar's only job is to match question text against labels.
+        ax_result: dict[str, Any] | None = None
+        if grounding_mode in ("auto", "ax") and ax_candidates:
+            ax_t0 = time.monotonic()
+            ax_result = _grounding.locate_from_ax(ax_candidates, transcript)
+            timings["ax_ms"] = _elapsed_ms(ax_t0)
             yield (
-                "caption_done",
-                {"caption": caption_text, "elapsed_ms": timings["caption_ms"]},
+                "ax_match",
+                {
+                    "hit": ax_result is not None,
+                    "candidates": len(ax_candidates),
+                    "elapsed_ms": timings["ax_ms"],
+                },
             )
-            debug_payload["caption"] = caption_text
+            logger.info(
+                "AX match: %s over %d candidates (%d ms)",
+                "hit" if ax_result else "miss",
+                len(ax_candidates),
+                timings["ax_ms"],
+            )
 
-        # ── Grounding: VLM → click coordinates ────────────────────────────
-        from . import grounding as _grounding
+        orig_size: tuple[int, int] = (0, 0)
+        new_size: tuple[int, int] = (0, 0)
+        image_for_vlm: bytes = image_bytes
+        downscale_event: dict[str, Any] = {}
+        result: dict[str, Any] = {}
+        rough_steps: list[dict[str, Any]] = []
 
-        yield ("grounding_start", {})
-        grounding_t0 = time.monotonic()
-        vlm = _make_vlm(settings)
-        result = _grounding.locate(
-            vlm,
-            image_for_vlm,
-            transcript,
-            system_prompt=grounding_prompt,
-        )
-        timings["grounding_ms"] = _elapsed_ms(grounding_t0)
+        if ax_result is not None:
+            # AX hit: skip VLM + refinement entirely. Coordinates are
+            # already pixel-accurate because they came straight from the
+            # accessibility API.
+            steps = list(ax_result.get("steps", []))
+            rough_steps = list(steps)
+            result = ax_result
+            grounding_event = {
+                "steps": steps,
+                "elapsed_ms": timings.get("ax_ms", 0),
+                "source": "ax",
+            }
+            if debug_enabled:
+                grounding_event["raw"] = ax_result.get("raw", "")
+            yield ("grounding_done", grounding_event)
+        elif grounding_mode == "ax":
+            # AX-only mode, no match: don't call the VLM at all.
+            # Emit an empty grounding_done so the UI can report "no target".
+            steps = []
+            yield (
+                "grounding_done",
+                {"steps": [], "elapsed_ms": timings.get("ax_ms", 0), "source": "ax"},
+            )
+            logger.info("AX-only mode: no candidate matched, skipping VLM")
+        else:
+            # ── VLM grounding path ────────────────────────────────────────
+            downscale_t0 = time.monotonic()
+            small_png, orig_size, new_size = _imaging.downscale_png(image_bytes)
+            timings["downscale_ms"] = _elapsed_ms(downscale_t0)
 
-        steps = result.get("steps", [])
+            if new_size != (0, 0):
+                logger.info(
+                    "screenshot downscaled: %s → %s (%d → %d bytes, %d ms)",
+                    orig_size,
+                    new_size,
+                    len(image_bytes),
+                    len(small_png),
+                    timings["downscale_ms"],
+                )
+                image_for_vlm = small_png
+            else:
+                image_for_vlm = image_bytes  # downscale failed, fall back
 
-        grounding_event: dict[str, Any] = {
-            "steps": steps,
-            "elapsed_ms": timings["grounding_ms"],
-        }
-        if debug_enabled:
-            grounding_event["raw"] = result.get("raw", "")
-        yield ("grounding_done", grounding_event)
-        logger.info("Grounding: %d steps (%d ms)", len(steps), timings["grounding_ms"])
+            downscale_event = {
+                "orig_size": list(orig_size),
+                "new_size": list(new_size),
+                "orig_bytes": len(image_bytes),
+                "new_bytes": len(image_for_vlm),
+                "elapsed_ms": timings["downscale_ms"],
+            }
+            if debug_enabled:
+                # Ship the tiny image down to the overlay so it can draw the
+                # "what the VLM sees" preview.
+                downscale_event["image_b64"] = base64.b64encode(image_for_vlm).decode()
+            yield ("image_downscaled", downscale_event)
+
+            # ── Optional caption step (debug mode only) ───────────────────
+            caption_text = ""
+            if debug_enabled:
+                vlm = _make_vlm(settings)
+                yield ("caption_start", {})
+                caption_t0 = time.monotonic()
+                try:
+                    caption_text = _grounding.caption(
+                        vlm, image_for_vlm, system_prompt=caption_prompt
+                    )
+                except Exception as exc:  # noqa: BLE001 — caption is best-effort
+                    caption_text = f"(caption failed: {exc})"
+                    logger.warning("caption failed: %s", exc)
+                timings["caption_ms"] = _elapsed_ms(caption_t0)
+                yield (
+                    "caption_done",
+                    {"caption": caption_text, "elapsed_ms": timings["caption_ms"]},
+                )
+                debug_payload["caption"] = caption_text
+
+            # ── Grounding: VLM → click coordinates ────────────────────────
+            yield ("grounding_start", {})
+            grounding_t0 = time.monotonic()
+            vlm = _make_vlm(settings)
+            result = _grounding.locate(
+                vlm,
+                image_for_vlm,
+                transcript,
+                system_prompt=grounding_prompt,
+            )
+            timings["grounding_ms"] = _elapsed_ms(grounding_t0)
+
+            steps = result.get("steps", [])
+
+            grounding_event = {
+                "steps": steps,
+                "elapsed_ms": timings["grounding_ms"],
+                "source": "vlm",
+            }
+            if debug_enabled:
+                grounding_event["raw"] = result.get("raw", "")
+            yield ("grounding_done", grounding_event)
+            logger.info(
+                "Grounding: %d steps (%d ms)", len(steps), timings["grounding_ms"]
+            )
+
+            rough_steps = list(steps)  # copy so debug can compare
 
         # ── Refinement pass (two-pass crop-and-refine) ───────────────────
         # The first pass ran on the downscaled image (~1/8 area) which is
@@ -250,8 +319,11 @@ def run(
         # a window from the FULL-resolution screenshot around that point
         # and ask the VLM to pinpoint the exact centre. Refined coords are
         # mapped back to full-image normalised space.
-        rough_steps = list(steps)  # copy so debug can compare
-        if steps and refine_enabled:
+        #
+        # AX-sourced steps skip refinement: the bounding box came directly
+        # from the accessibility API so it's already pixel-perfect.
+        if steps and refine_enabled and result.get("source") != "ax" and ax_result is None:
+            vlm = _make_vlm(settings)
             refine_t0 = time.monotonic()
             yield ("refine_start", {"count": len(steps)})
             refined_steps: list[dict[str, Any]] = []

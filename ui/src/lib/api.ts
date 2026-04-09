@@ -50,7 +50,19 @@ export interface SystemPromptsSettings {
   caption: string;
 }
 
+/**
+ * Grounding strategy selector.
+ *
+ * - `"auto"` (default): probe the macOS Accessibility tree first, fall back
+ *   to VLM if no candidate matches the question.
+ * - `"ax"`: AX-only — refuse to run the VLM. Useful for latency-critical
+ *   native-app workflows where a VLM miss is worse than a no-op.
+ * - `"vlm"`: VLM-only — skip AX probing entirely (current pre-P4.2 behaviour).
+ */
+export type GroundingMode = "auto" | "ax" | "vlm";
+
 export interface GroundingSettings {
+  mode: GroundingMode;
   /**
    * When true, run a second VLM pass on a full-resolution crop around each
    * rough target to tighten pixel accuracy. Adds one VLM call per step.
@@ -94,7 +106,7 @@ export function defaultSettings(): Settings {
     },
     debug: { enabled: false },
     system_prompts: { grounding: "", caption: "" },
-    grounding: { refine: true },
+    grounding: { mode: "auto", refine: true },
   };
 }
 
@@ -386,6 +398,29 @@ export function groundingLocate(
 /** Capture the primary display and return base64 PNG (null if permission denied). */
 export function captureScreen(): Promise<string | null> {
   return invoke<string | null>("capture_screen");
+}
+
+/** One clickable candidate returned by the macOS Accessibility walker. */
+export interface AxCandidate {
+  role: string;
+  title: string;
+  description: string;
+  /** Screen-space frame in pixels. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Walk the macOS Accessibility (AX) tree of the frontmost app's focused
+ * window and return clickable candidates in screen-pixel coordinates.
+ *
+ * Returns an empty array on non-macOS platforms, when AX permission has not
+ * been granted, or when the focused app exposes no AX tree.
+ */
+export function axLocate(): Promise<AxCandidate[]> {
+  return invoke<AxCandidate[]>("ax_locate");
 }
 
 /** Play a base64-encoded WAV file using the Web Audio API. */

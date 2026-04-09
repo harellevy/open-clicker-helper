@@ -8,7 +8,8 @@ use tauri::WebviewWindow;
 
 use crate::error::{AppError, AppResult};
 use crate::platform::{
-    MouseTracker, OverlayWindow, PermissionStatus, Permissions, Platform, ScreenCapture,
+    AxCandidate, AxTree, MouseTracker, OverlayWindow, PermissionStatus, Permissions, Platform,
+    ScreenCapture,
 };
 
 pub struct StubPlatform;
@@ -25,6 +26,9 @@ impl Platform for StubPlatform {
     }
     fn mouse(&self) -> Box<dyn MouseTracker> {
         Box::new(StubMouse)
+    }
+    fn ax(&self) -> Box<dyn AxTree> {
+        Box::new(StubAx)
     }
 }
 
@@ -65,5 +69,26 @@ impl MouseTracker for StubMouse {
 
     fn click(&self, _x: f64, _y: f64) -> AppResult<()> {
         Ok(()) // no-op on non-macOS
+    }
+}
+
+struct StubAx;
+impl AxTree for StubAx {
+    fn focused_window_candidates(&self) -> AppResult<Vec<AxCandidate>> {
+        // No Accessibility API off macOS — return nothing and let the
+        // grounding pipeline fall through to VLM.
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stub_ax_returns_empty() {
+        let ax = StubAx;
+        let v = ax.focused_window_candidates().unwrap();
+        assert!(v.is_empty());
     }
 }
