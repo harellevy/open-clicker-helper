@@ -235,7 +235,32 @@ export const api = {
       method: "providers.test",
       params: { type, provider, config },
     }),
+
+  // Conversation history
+  getHistory: () => invoke<SessionRecord[]>("get_history"),
+  clearHistory: () => invoke<void>("clear_history"),
 };
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Conversation history (mirrors src-tauri/src/history.rs)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface SessionRecord {
+  /** Monotonically increasing id (unix-millis at write time). */
+  id: number;
+  /** Wall-clock time the pipeline finished (unix millis). */
+  timestamp_ms: number;
+  /** Transcribed user question. */
+  transcript: string;
+  /** Spoken assistant answer. */
+  answer: string;
+  /** Number of grounding steps produced (0 in text-only mode). */
+  steps_count: number;
+  /** "ax", "vlm", or null for text-only sessions. */
+  grounding_source: string | null;
+  /** End-to-end pipeline duration in milliseconds, if reported. */
+  total_ms: number | null;
+}
 
 /** Subscribe to progress notifications relayed from the Python sidecar. */
 export function onSidecarProgress(

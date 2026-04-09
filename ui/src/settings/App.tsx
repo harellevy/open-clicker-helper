@@ -7,6 +7,7 @@ import { HotkeysPage } from "./pages/Hotkeys";
 import { GroundingPage } from "./pages/Grounding";
 import { DebugPage } from "./pages/Debug";
 import { PromptsPage } from "./pages/Prompts";
+import { HistoryPage } from "./pages/History";
 import { ResetPage } from "./pages/Reset";
 
 type Page =
@@ -16,6 +17,7 @@ type Page =
   | "grounding"
   | "prompts"
   | "debug"
+  | "history"
   | "reset";
 
 export function App() {
@@ -61,6 +63,7 @@ export function App() {
           <NavItem id="grounding" label="Grounding" current={page} onClick={setPage} />
           <NavItem id="prompts" label="System Prompts" current={page} onClick={setPage} />
           <NavItem id="debug" label="Debug" current={page} onClick={setPage} />
+          <NavItem id="history" label="History" current={page} onClick={setPage} />
           <NavItem id="reset" label="Reset" current={page} onClick={setPage} />
         </nav>
         <main className="main-content">
@@ -80,6 +83,7 @@ export function App() {
           {page === "debug" && (
             <DebugPage settings={settings} onChange={handleSettings} />
           )}
+          {page === "history" && <HistoryPage />}
           {page === "reset" && (
             <ResetPage onReset={setSettings} />
           )}

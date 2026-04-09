@@ -10,6 +10,7 @@
 
 mod audio;
 mod error;
+mod history;
 mod ipc;
 mod platform;
 mod sidecar;
@@ -77,6 +78,8 @@ pub fn run() {
             ipc::capture_screen,
             ipc::ax_locate,
             ipc::click_at_normalized,
+            ipc::get_history,
+            ipc::clear_history,
         ])
         .setup(|app| {
             // Configure the transparent overlay window with native macOS flags.
@@ -356,6 +359,22 @@ async fn process_recording(app: &tauri::AppHandle) {
         .await
     {
         Ok(result) => {
+            // Persist a history entry before emitting the result so the UI can
+            // refetch immediately if it wants to. A failure to write should
+            // never break the pipeline, so we log and continue.
+            let should_log = result
+                .get("cancelled")
+                .and_then(|v| v.as_str())
+                .map(str::is_empty)
+                .unwrap_or(true);
+            if should_log {
+                let record = history::record_from_pipeline_result(&result);
+                if !record.transcript.is_empty() || !record.answer.is_empty() {
+                    if let Err(e) = history::append(app, record) {
+                        tracing::warn!("history append failed: {e}");
+                    }
+                }
+            }
             let _ = app.emit("pipeline-result", result);
             tracing::debug!("pipeline completed");
         }
