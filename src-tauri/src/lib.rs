@@ -138,6 +138,11 @@ pub fn run() {
             // Register the global push-to-talk hotkey from settings.
             register_hotkey(app);
 
+            // Install the menu-bar tray (P6).
+            if let Err(e) = build_tray(app) {
+                tracing::warn!("tray init failed: {e}");
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -352,6 +357,76 @@ fn load_settings_json(app: &tauri::AppHandle) -> serde_json::Value {
         .ok()
         .and_then(|s| s.get(store::SETTINGS_KEY))
         .unwrap_or_else(|| serde_json::json!({}))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Menu-bar tray (P6)
+
+/// Build the macOS menu-bar tray icon with Show Settings / Toggle Overlay /
+/// Quit entries. Clicks on the icon itself also bring the settings window
+/// forward, matching mainstream menu-bar-app conventions.
+fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::TrayIconBuilder;
+
+    let show_settings = MenuItem::with_id(
+        app,
+        "tray_show_settings",
+        "Show Settings",
+        true,
+        None::<&str>,
+    )?;
+    let toggle_overlay = MenuItem::with_id(
+        app,
+        "tray_toggle_overlay",
+        "Toggle Overlay",
+        true,
+        None::<&str>,
+    )?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "tray_quit", "Quit", true, None::<&str>)?;
+
+    let menu = Menu::with_items(app, &[&show_settings, &toggle_overlay, &separator, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id("main").tooltip("open-clicker-helper");
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+
+    builder
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "tray_show_settings" => focus_settings(app),
+            "tray_toggle_overlay" => toggle_overlay_visibility(app),
+            "tray_quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+fn focus_settings(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+fn toggle_overlay_visibility(app: &tauri::AppHandle) {
+    let Some(overlay) = app.get_webview_window("overlay") else {
+        return;
+    };
+    match overlay.is_visible() {
+        Ok(true) => {
+            let _ = overlay.hide();
+        }
+        Ok(false) => {
+            let _ = overlay.show();
+        }
+        Err(e) => tracing::warn!("overlay visibility check failed: {e}"),
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
