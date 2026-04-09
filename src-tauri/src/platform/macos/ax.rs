@@ -27,8 +27,8 @@ use accessibility_sys::{
     kAXChildrenAttribute, kAXDescriptionAttribute, kAXFocusedApplicationAttribute,
     kAXFocusedWindowAttribute, kAXPositionAttribute, kAXRoleAttribute, kAXSizeAttribute,
     kAXTitleAttribute, kAXValueAttribute, kAXValueTypeCGPoint, kAXValueTypeCGSize,
-    AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementRef, AXValueGetValue,
-    AXValueRef,
+    AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementGetTypeID,
+    AXUIElementRef, AXValueGetTypeID, AXValueGetValue, AXValueRef,
 };
 use core_foundation::{
     array::CFArray,
@@ -36,9 +36,9 @@ use core_foundation::{
     string::CFString,
 };
 use core_foundation_sys::{
-    array::CFArrayRef,
-    base::{CFRelease, CFTypeRef},
-    string::CFStringRef,
+    array::{CFArrayGetTypeID, CFArrayRef},
+    base::{CFGetTypeID, CFRelease, CFTypeRef},
+    string::{CFStringGetTypeID, CFStringRef},
 };
 
 use crate::error::AppResult;
@@ -99,10 +99,16 @@ unsafe fn walk_focused_window() -> Vec<AxCandidate> {
 
     let mut out = Vec::new();
 
-    if let Some(app_ref) = copy_attribute(system_wide, kAXFocusedApplicationAttribute) {
-        if let Some(window_ref) =
-            copy_attribute(app_ref as AXUIElementRef, kAXFocusedWindowAttribute)
-        {
+    if let Some(app_ref) = copy_attribute_of_type(
+        system_wide,
+        kAXFocusedApplicationAttribute,
+        AXUIElementGetTypeID(),
+    ) {
+        if let Some(window_ref) = copy_attribute_of_type(
+            app_ref as AXUIElementRef,
+            kAXFocusedWindowAttribute,
+            AXUIElementGetTypeID(),
+        ) {
             walk(window_ref as AXUIElementRef, 0, &mut out);
             CFRelease(window_ref);
         }
@@ -157,15 +163,20 @@ unsafe fn walk(element: AXUIElementRef, depth: usize, out: &mut Vec<AxCandidate>
 
     // Recurse into children (owned CFArray of AXUIElementRef). Ownership
     // transfers to the `CFArray` wrapper which releases on drop, so we must
-    // *not* also CFRelease the raw ptr.
-    if let Some(children_ref) = copy_attribute(element, kAXChildrenAttribute) {
+    // *not* also CFRelease the raw ptr. The type check guards against
+    // ill-behaved apps that hand back something other than a CFArray for
+    // kAXChildrenAttribute — calling CFArrayGetCount on a non-array throws
+    // an ObjC exception that would abort the whole Rust process.
+    if let Some(children_ref) =
+        copy_attribute_of_type(element, kAXChildrenAttribute, CFArrayGetTypeID())
+    {
         let arr: CFArray<CFType> = CFArray::wrap_under_create_rule(children_ref as CFArrayRef);
         for item in arr.iter() {
             if out.len() >= MAX_CANDIDATES {
                 break;
             }
             let child = item.as_CFTypeRef() as AXUIElementRef;
-            if !child.is_null() {
+            if !child.is_null() && CFGetTypeID(child as CFTypeRef) == AXUIElementGetTypeID() {
                 walk(child, depth + 1, out);
             }
         }
@@ -191,13 +202,42 @@ unsafe fn copy_attribute(element: AXUIElementRef, attr: &str) -> Option<CFTypeRe
     }
 }
 
+/// Like [`copy_attribute`], but also verifies the returned `CFTypeRef` has the
+/// expected Core Foundation type ID. If the attribute resolves to something of
+/// the wrong type (e.g. `kAXValueAttribute` returning a number when the caller
+/// expects a `CFString`), we `CFRelease` the value and return `None`.
+///
+/// This is the linchpin of the walker's crash safety: Core Foundation / ObjC
+/// APIs throw exceptions on type mismatches, and Rust cannot catch foreign
+/// exceptions — they immediately abort the process. Validating up front means
+/// we never feed a wrong-typed pointer into `CFString::to_string`,
+/// `CFArrayGetCount`, or `AXValueGetValue`.
+///
+/// SAFETY: `element` must be a valid AXUIElementRef.
+unsafe fn copy_attribute_of_type(
+    element: AXUIElementRef,
+    attr: &str,
+    expected: core_foundation_sys::base::CFTypeID,
+) -> Option<CFTypeRef> {
+    let raw = copy_attribute(element, attr)?;
+    if CFGetTypeID(raw) == expected {
+        Some(raw)
+    } else {
+        CFRelease(raw);
+        None
+    }
+}
+
 /// Copy a string-valued attribute as an owned Rust `String`. Returns `None`
 /// on any failure (missing attribute, wrong type, …) so callers can chain
 /// with `.or_else`.
 ///
 /// SAFETY: `element` must be a valid AXUIElementRef.
 unsafe fn copy_string(element: AXUIElementRef, attr: &str) -> Option<String> {
-    let raw = copy_attribute(element, attr)?;
+    // Guard against type mismatch: kAXValueAttribute in particular may return
+    // numbers, bools, dicts, or AXValues depending on the element, and calling
+    // CFString methods on a non-string CFType would throw an ObjC exception.
+    let raw = copy_attribute_of_type(element, attr, CFStringGetTypeID())?;
     // wrap_under_create_rule transfers ownership so the string is released
     // when we drop it.
     let s = CFString::wrap_under_create_rule(raw as CFStringRef);
@@ -226,8 +266,17 @@ unsafe fn copy_frame(element: AXUIElementRef) -> Option<(f64, f64, f64, f64)> {
         height: f64,
     }
 
-    let pos_ref = copy_attribute(element, kAXPositionAttribute)?;
-    let size_ref = copy_attribute(element, kAXSizeAttribute)?;
+    // AXValueGetValue on a non-AXValue CFType throws — validate the type ID
+    // first, otherwise the whole process aborts with
+    // "Rust cannot catch foreign exceptions".
+    let pos_ref = copy_attribute_of_type(element, kAXPositionAttribute, AXValueGetTypeID())?;
+    let size_ref = match copy_attribute_of_type(element, kAXSizeAttribute, AXValueGetTypeID()) {
+        Some(r) => r,
+        None => {
+            CFRelease(pos_ref);
+            return None;
+        }
+    };
 
     let mut point = CGPoint { x: 0.0, y: 0.0 };
     let mut size = CGSize {
